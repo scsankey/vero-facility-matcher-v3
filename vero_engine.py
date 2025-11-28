@@ -722,41 +722,52 @@ def run_vero_pipeline(gov_df=None, ngo_df=None, whatsapp_df=None, ground_truth_d
     
     # Stage 5: Prediction
     print("\n[5/6] Computing features and predicting...")
-    u_idx = unified.set_index("RecordID")
     
-    rows = []
-    for rid_a, rid_b in candidate_pairs:
-        row_a = u_idx.loc[rid_a]
-        row_b = u_idx.loc[rid_b]
-        feats = compute_pair_features(row_a, row_b, id_to_emb)
-        feats["record_A"] = rid_a
-        feats["record_B"] = rid_b
-        feats["source_A"] = row_a["SourceSystem"]
-        feats["source_B"] = row_b["SourceSystem"]
-        feats["name_A"] = row_a["Name"]
-        feats["name_B"] = row_b["Name"]
-        rows.append(feats)
-    
-    cand_features = pd.DataFrame(rows)
-    
-    X_cand = cand_features[FEATURE_COLS].values
-    X_cand_scaled = scaler.transform(X_cand)
-    probs = model.predict_proba(X_cand_scaled)[:, 1]
-    cand_features["match_prob"] = probs
-    
-    # Two-tier threshold
-    high_conf = cand_features[cand_features["match_prob"] >= high_threshold]
-    medium_conf = cand_features[
-        (cand_features["match_prob"] >= medium_threshold) &
-        (cand_features["match_prob"] < high_threshold) &
-        (cand_features["jw_name"] >= NAME_SIMILARITY_THRESHOLD)
-    ]
-    matched_pairs = pd.concat([high_conf, medium_conf], ignore_index=True)
-    matched_pairs = matched_pairs.sort_values("match_prob", ascending=False)
-    
-    print(f"✅ Found {len(matched_pairs)} strong matches")
-    print(f"   High confidence (>={high_threshold}): {len(high_conf)}")
-    print(f"   Medium confidence ({medium_threshold}-{high_threshold}): {len(medium_conf)}")
+    if len(candidate_pairs) == 0:
+        print("⚠️ No candidate pairs found - all records will be singletons")
+        matched_pairs = pd.DataFrame(columns=['record_A', 'record_B', 'match_prob', 'name_A', 'name_B', 'source_A', 'source_B'])
+    else:
+        u_idx = unified.set_index("RecordID")
+        
+        rows = []
+        for rid_a, rid_b in candidate_pairs:
+            row_a = u_idx.loc[rid_a]
+            row_b = u_idx.loc[rid_b]
+            feats = compute_pair_features(row_a, row_b, id_to_emb)
+            
+            # Safe access to Series fields
+            def safe_val(row, key):
+                val = row.get(key) if isinstance(row, dict) else row[key]
+                return str(val) if pd.notna(val) else ""
+            
+            feats["record_A"] = rid_a
+            feats["record_B"] = rid_b
+            feats["source_A"] = safe_val(row_a, "SourceSystem")
+            feats["source_B"] = safe_val(row_b, "SourceSystem")
+            feats["name_A"] = safe_val(row_a, "Name")
+            feats["name_B"] = safe_val(row_b, "Name")
+            rows.append(feats)
+        
+        cand_features = pd.DataFrame(rows)
+        
+        X_cand = cand_features[FEATURE_COLS].values
+        X_cand_scaled = scaler.transform(X_cand)
+        probs = model.predict_proba(X_cand_scaled)[:, 1]
+        cand_features["match_prob"] = probs
+        
+        # Two-tier threshold
+        high_conf = cand_features[cand_features["match_prob"] >= high_threshold]
+        medium_conf = cand_features[
+            (cand_features["match_prob"] >= medium_threshold) &
+            (cand_features["match_prob"] < high_threshold) &
+            (cand_features["jw_name"] >= NAME_SIMILARITY_THRESHOLD)
+        ]
+        matched_pairs = pd.concat([high_conf, medium_conf], ignore_index=True)
+        matched_pairs = matched_pairs.sort_values("match_prob", ascending=False)
+        
+        print(f"✅ Found {len(matched_pairs)} strong matches")
+        print(f"   High confidence (>={high_threshold}): {len(high_conf)}")
+        print(f"   Medium confidence ({medium_threshold}-{high_threshold}): {len(medium_conf)}")
     
     # Stage 6: Build EARE Tables
     print("\n[6/6] Building EARE standard tables...")
