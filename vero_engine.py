@@ -464,6 +464,7 @@ def build_clusters(matched_pairs_df, unified_df):
 
     EARE-ready:
     - Clusters are still graphs, but each row now carries EntityType and SourceSystem.
+    - Includes EntityID field for app.py compatibility (EntityID = ClusterID)
     """
     # Build graph from matched pairs
     G = nx.Graph()
@@ -482,9 +483,13 @@ def build_clusters(matched_pairs_df, unified_df):
             row = u_idx.loc[rid]
             cluster_rows.append({
                 "ClusterID": cluster_id,
+                "EntityID": cluster_id,  # Added for app.py compatibility
                 "RecordID": rid,
                 "EntityType": row.get("EntityType", "unknown"),
                 "SourceSystem": row.get("SourceSystem", ""),
+                "SourceName": row.get("Name", ""),  # Backward compat field name
+                "SourceDistrict": row.get("District", ""),  # Backward compat field name
+                "SourcePhone": row.get("Phone", ""),  # Backward compat field name
                 "Name": row.get("Name", ""),
                 "AltName": row.get("AltName", ""),
                 "District": row.get("District", ""),
@@ -499,11 +504,16 @@ def build_clusters(matched_pairs_df, unified_df):
 
     for rid in singleton_ids:
         row = u_idx.loc[rid]
+        singleton_id = f"Singleton_{rid}"
         cluster_rows.append({
-            "ClusterID": f"Singleton_{rid}",
+            "ClusterID": singleton_id,
+            "EntityID": singleton_id,  # Added for app.py compatibility
             "RecordID": rid,
             "EntityType": row.get("EntityType", "unknown"),
             "SourceSystem": row.get("SourceSystem", ""),
+            "SourceName": row.get("Name", ""),  # Backward compat field name
+            "SourceDistrict": row.get("District", ""),  # Backward compat field name
+            "SourcePhone": row.get("Phone", ""),  # Backward compat field name
             "Name": row.get("Name", ""),
             "AltName": row.get("AltName", ""),
             "District": row.get("District", ""),
