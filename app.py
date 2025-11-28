@@ -1,6 +1,6 @@
 """
 app.py
-VERO - Streaming-Ready Entity Resolution Platform
+VERO.v3 - Streaming-Ready Entity Resolution Platform
 Upload → Batch Ingest → Rebuild Canonical → LLM Chat → Download
 """
 
