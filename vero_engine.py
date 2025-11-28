@@ -255,15 +255,25 @@ def compute_pair_features(rec_a, rec_b, id_to_emb):
     Compute similarity features for entity resolution
     Handles both Series and dict inputs
     """
-    # Convert Series to dict if needed
-    if isinstance(rec_a, pd.Series):
-        rec_a = rec_a.to_dict()
-    if isinstance(rec_b, pd.Series):
-        rec_b = rec_b.to_dict()
+    # Store RecordID before conversion (for Series, it's in the index)
+    rec_a_id = rec_a.name if isinstance(rec_a, pd.Series) else rec_a.get('RecordID')
+    rec_b_id = rec_b.name if isinstance(rec_b, pd.Series) else rec_b.get('RecordID')
     
-    # Extract cleaned fields
-    name_a = rec_a["name_clean"]
-    name_b = rec_b["name_clean"]
+    # Convert Series to dict if needed and ensure string types
+    if isinstance(rec_a, pd.Series):
+        rec_a_dict = {}
+        for key, val in rec_a.to_dict().items():
+            rec_a_dict[key] = str(val) if pd.notna(val) else ""
+        rec_a = rec_a_dict
+    if isinstance(rec_b, pd.Series):
+        rec_b_dict = {}
+        for key, val in rec_b.to_dict().items():
+            rec_b_dict[key] = str(val) if pd.notna(val) else ""
+        rec_b = rec_b_dict
+    
+    # Extract cleaned fields and ensure they're strings
+    name_a = str(rec_a.get("name_clean", ""))
+    name_b = str(rec_b.get("name_clean", ""))
     
     # Name similarity metrics
     jw_name = distance.JaroWinkler.normalized_similarity(name_a, name_b)
@@ -278,10 +288,10 @@ def compute_pair_features(rec_a, rec_b, id_to_emb):
     nickname = nickname_score(name_a, name_b)
     
     # Alternative name comparisons
-    alt_a_a = rec_a["alt_a_clean"]
-    alt_a_b = rec_b["alt_a_clean"]
-    alt_b_a = rec_a["alt_b_clean"]
-    alt_b_b = rec_b["alt_b_clean"]
+    alt_a_a = str(rec_a.get("alt_a_clean", ""))
+    alt_a_b = str(rec_b.get("alt_a_clean", ""))
+    alt_b_a = str(rec_a.get("alt_b_clean", ""))
+    alt_b_b = str(rec_b.get("alt_b_clean", ""))
     
     jw_alt_a = distance.JaroWinkler.normalized_similarity(alt_a_a, alt_a_b)
     jw_alt_b = distance.JaroWinkler.normalized_similarity(alt_b_a, alt_b_b)
@@ -290,14 +300,14 @@ def compute_pair_features(rec_a, rec_b, id_to_emb):
     )
     
     # District comparison
-    district_a = rec_a["district_clean"]
-    district_b = rec_b["district_clean"]
+    district_a = str(rec_a.get("district_clean", ""))
+    district_b = str(rec_b.get("district_clean", ""))
     district_exact = int(district_a == district_b and district_a != "")
     district_fuzzy = fuzz.token_set_ratio(district_a, district_b) / 100.0
     
     # Phone comparison
-    phone_a = rec_a["phone_clean"]
-    phone_b = rec_b["phone_clean"]
+    phone_a = str(rec_a.get("phone_clean", ""))
+    phone_b = str(rec_b.get("phone_clean", ""))
     phone_exact = int(phone_a != "" and phone_a == phone_b)
     
     last4_a = phone_a[-4:] if len(phone_a) >= 4 else ""
@@ -305,11 +315,7 @@ def compute_pair_features(rec_a, rec_b, id_to_emb):
     phone_partial = int(last4_a != "" and last4_a == last4_b)
     phone_both_missing = int(phone_a == "" and phone_b == "")
     
-    # Embedding similarity
-    # For Series, use the index (RecordID), for dict use the 'RecordID' key
-    rec_a_id = rec_a.get('RecordID') if isinstance(rec_a, dict) else rec_a.name
-    rec_b_id = rec_b.get('RecordID') if isinstance(rec_b, dict) else rec_b.name
-    
+    # Embedding similarity (use RecordIDs we stored before conversion)
     emb_a = id_to_emb.get(rec_a_id)
     emb_b = id_to_emb.get(rec_b_id)
     cos_embed = float(util.cos_sim(emb_a, emb_b).cpu().numpy()[0][0]) if emb_a is not None and emb_b is not None else 0.0
@@ -337,23 +343,30 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
     if rid_a == rid_b:
         return False
 
+    # Convert Series to safe string access
+    def safe_get(row, key, default=""):
+        if isinstance(row, pd.Series):
+            val = row.get(key, default)
+            return str(val) if pd.notna(val) else default
+        return str(row.get(key, default))
+
     # ---------- HARD BLOCK: entity type mismatch ----------
-    if row_a.get("EntityType") != row_b.get("EntityType"):
+    if safe_get(row_a, "EntityType", "unknown") != safe_get(row_b, "EntityType", "unknown"):
         return False
 
     conditions_met = 0
 
     # Condition 1: District match
-    d_a = row_a["district_clean"]
-    d_b = row_b["district_clean"]
+    d_a = safe_get(row_a, "district_clean")
+    d_b = safe_get(row_b, "district_clean")
     if d_a and d_b:
         district_score = fuzz.token_set_ratio(d_a, d_b) / 100.0
         if district_score >= district_threshold:
             conditions_met += 1
 
     # Condition 2: Phone last4 match
-    p_a = row_a["phone_clean"]
-    p_b = row_b["phone_clean"]
+    p_a = safe_get(row_a, "phone_clean")
+    p_b = safe_get(row_b, "phone_clean")
     last4_a = p_a[-4:] if len(p_a) >= 4 else ""
     last4_b = p_b[-4:] if len(p_b) >= 4 else ""
     if last4_a and last4_a == last4_b:
@@ -362,16 +375,18 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
     # Condition 3: Meaningful name token overlap (excluding generic words)
     common_words = {'health', 'centre', 'center', 'hospital', 'district',
                     'rural', 'clinic', 'post', 'community', 'area'}
-    tokens_a = set(row_a["name_clean"].split()) - common_words
-    tokens_b = set(row_b["name_clean"].split()) - common_words
+    name_a = safe_get(row_a, "name_clean")
+    name_b = safe_get(row_b, "name_clean")
+    tokens_a = set(name_a.split()) - common_words
+    tokens_b = set(name_b.split()) - common_words
 
     if len(tokens_a & tokens_b) > 0:
         conditions_met += 1
 
     # Condition 4: Facility-type consistency (only for facilities)
-    if row_a.get("EntityType") == "facility" and row_b.get("EntityType") == "facility":
-        type_a = extract_facility_type(row_a["Name"])
-        type_b = extract_facility_type(row_b["Name"])
+    if safe_get(row_a, "EntityType", "unknown") == "facility" and safe_get(row_b, "EntityType", "unknown") == "facility":
+        type_a = extract_facility_type(safe_get(row_a, "Name"))
+        type_b = extract_facility_type(safe_get(row_b, "Name"))
         if type_a != 'unknown' and type_b != 'unknown' and type_a != type_b:
             return False
 
