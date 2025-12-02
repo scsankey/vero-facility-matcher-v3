@@ -1,6 +1,6 @@
 """
 vero_engine.py
-VERO Entity Resolution Engine - EARE Multi-Entity Standard v4.0
+VERO Entity Resolution Engine - EARE Multi-Entity Standard v4.0.4
 
 EARE Framework:
 E = Entities: facilities, people, districts, shipments, etc.
@@ -14,6 +14,13 @@ Core Principles:
 3. Type-safe clustering (never mix entity types)
 4. Extensible via explicit configs
 5. Canonical entities with dynamic attributes
+6. Dynamic source system handling (no hardcoded sources)
+
+v4.0.4 Changes:
+- Fixed: generate_candidate_pairs() now works with ANY source systems
+- Fixed: Within-source matching enabled (same source comparisons)
+- Fixed: No more hardcoded "NGO", "Gov", "WhatsApp" requirements
+- Improved: Fully dynamic cross-source and within-source pairing
 """
 
 import pandas as pd
@@ -394,45 +401,65 @@ def should_compare(rid_a, rid_b, row_a, row_b, district_threshold=DISTRICT_BLOCK
 
 def generate_candidate_pairs(unified_df):
     """
-    Generate candidate pairs using blocking.
+    Generate candidate pairs using blocking - FULLY DYNAMIC VERSION.
 
-    EARE-ready:
-    - Only compare records with the same EntityType.
-    - Currently still focuses on NGO vs Gov vs WhatsApp, but can be extended.
+    EARE-ready v4.0.4:
+    - Works with ANY source systems (no hardcoded "NGO", "Gov", "WhatsApp")
+    - Compares across different source systems (cross-source matching)
+    - Compares within same source system (within-source matching)
+    - Only compares records with the same EntityType
+    
+    Strategy:
+    1. Group records by (SourceSystem, EntityType)
+    2. Compare each group against all other groups (cross-source)
+    3. Compare records within each group (within-source)
     """
     u_idx = unified_df.set_index("RecordID")
-
-    ngo_ids = unified_df[unified_df["SourceSystem"] == "NGO"]["RecordID"].tolist()
-    gov_ids = unified_df[unified_df["SourceSystem"] == "Gov"]["RecordID"].tolist()
-    wa_ids  = unified_df[unified_df["SourceSystem"] == "WhatsApp"]["RecordID"].tolist()
-
     candidate_pairs = []
-
-    # NGO vs Gov
-    for rid_ng in ngo_ids:
-        row_ng = u_idx.loc[rid_ng]
-        for rid_g in gov_ids:
-            row_g = u_idx.loc[rid_g]
-            if should_compare(rid_ng, rid_g, row_ng, row_g):
-                candidate_pairs.append((rid_ng, rid_g))
-
-    # NGO vs WhatsApp
-    for rid_ng in ngo_ids:
-        row_ng = u_idx.loc[rid_ng]
-        for rid_w in wa_ids:
-            row_w = u_idx.loc[rid_w]
-            if should_compare(rid_ng, rid_w, row_ng, row_w):
-                candidate_pairs.append((rid_ng, rid_w))
-
-    # Gov vs WhatsApp
-    for rid_g in gov_ids:
-        row_g = u_idx.loc[rid_g]
-        for rid_w in wa_ids:
-            row_w = u_idx.loc[rid_w]
-            if should_compare(rid_g, rid_w, row_g, row_w):
-                candidate_pairs.append((rid_g, rid_w))
-
-    return list(set(candidate_pairs))
+    
+    # Get all unique (SourceSystem, EntityType) combinations
+    groups = unified_df.groupby(["SourceSystem", "EntityType"])
+    group_list = [(source, entity_type, group["RecordID"].tolist()) 
+                  for (source, entity_type), group in groups]
+    
+    print(f"   Found {len(group_list)} source-entity groups:")
+    for source, entity_type, ids in group_list:
+        print(f"     - {source} ({entity_type}): {len(ids)} records")
+    
+    # ========================================================================
+    # CROSS-SOURCE COMPARISONS (different source systems, same entity type)
+    # ========================================================================
+    
+    for i, (source_a, entity_type_a, ids_a) in enumerate(group_list):
+        for j, (source_b, entity_type_b, ids_b) in enumerate(group_list):
+            # Only compare if:
+            # 1. Different sources OR same source (for within-source matching)
+            # 2. Same entity type (enforced by should_compare, but optimize here)
+            # 3. Not comparing same group twice (i < j for cross-source)
+            
+            if i == j:
+                # Within-source matching (same group)
+                for idx_a, rid_a in enumerate(ids_a):
+                    row_a = u_idx.loc[rid_a]
+                    for rid_b in ids_a[idx_a + 1:]:  # Only compare each pair once
+                        row_b = u_idx.loc[rid_b]
+                        if should_compare(rid_a, rid_b, row_a, row_b):
+                            candidate_pairs.append((rid_a, rid_b))
+            
+            elif i < j and entity_type_a == entity_type_b:
+                # Cross-source matching (different groups, same entity type)
+                for rid_a in ids_a:
+                    row_a = u_idx.loc[rid_a]
+                    for rid_b in ids_b:
+                        row_b = u_idx.loc[rid_b]
+                        if should_compare(rid_a, rid_b, row_a, row_b):
+                            candidate_pairs.append((rid_a, rid_b))
+    
+    # Remove duplicates and return
+    unique_pairs = list(set(candidate_pairs))
+    print(f"   Generated {len(unique_pairs)} candidate pairs")
+    
+    return unique_pairs
 
 # ============================================================================
 # STAGE 4: MODEL TRAINING
@@ -552,14 +579,17 @@ def build_canonical_entities_table(clusters_df):
     Columns:
         EntityID            : ClusterID or Singleton ID
         EntityType          : 'facility', 'person', 'district', ...
-        CanonicalName       : primary name (preferring Gov if available)
-        PrimaryDistrict     : best-choice district (preferring Gov, or most common)
+        CanonicalName       : primary name (preferring authoritative sources)
+        PrimaryDistrict     : best-choice district (from primary source or most common)
         CanonicalPhones     : deduped phone list (string, ' | '-joined)
         Aliases             : all distinct names (incl AltName) ' | '-joined
         SourcesRepresented  : +-joined distinct SourceSystem values
         RecordCount         : number of raw records in the cluster
         SourceRecordIDs     : ' | '-joined RecordIDs
         Attributes_JSON     : merged attributes from Attributes_JSON field
+        
+    v4.0.4: Now prefers any authoritative source (Gov, HMIS, Registry, Official)
+            not just hardcoded "Gov"
     """
     import json
     canonical_rows = []
@@ -572,11 +602,19 @@ def build_canonical_entities_table(clusters_df):
     clusters_df["EntityType"] = clusters_df["EntityType"].fillna("unknown")
 
     for (cluster_id, entity_type), group in clusters_df.groupby(["ClusterID", "EntityType"]):
-        # Prioritise Gov records for canonical name, if present
-        gov_records = group[group["SourceSystem"] == "Gov"]
-        if len(gov_records) > 0:
-            primary = gov_records.iloc[0]
-        else:
+        # Prioritise records from authoritative sources for canonical name
+        # Preferred sources (in order): Gov, HMIS, official registries, then others
+        preferred_sources = ["Gov", "HMIS", "Registry", "Official"]
+        
+        primary = None
+        for source in preferred_sources:
+            source_records = group[group["SourceSystem"].str.contains(source, case=False, na=False)]
+            if len(source_records) > 0:
+                primary = source_records.iloc[0]
+                break
+        
+        # If no preferred source, just use first record
+        if primary is None:
             primary = group.iloc[0]
 
         # Names / aliases
@@ -586,11 +624,13 @@ def build_canonical_entities_table(clusters_df):
 
         canonical_name = primary.get("Name", "") or (aliases_list[0] if aliases_list else "")
 
-        # District
-        district_values = group["District"].dropna()
-        if len(gov_records) > 0 and pd.notna(primary.get("District", None)):
+        # District - prefer from primary source, otherwise use most common
+        primary_district = ""
+        if pd.notna(primary.get("District", None)):
             primary_district = primary["District"]
-        elif len(district_values) > 0:
+        else:
+            district_values = group["District"].dropna()
+            if len(district_values) > 0:
             primary_district = district_values.mode().iloc[0]
         else:
             primary_district = ""
