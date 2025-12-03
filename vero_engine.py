@@ -631,9 +631,9 @@ def build_canonical_entities_table(clusters_df):
         else:
             district_values = group["District"].dropna()
             if len(district_values) > 0:
-            primary_district = district_values.mode().iloc[0]
-        else:
-            primary_district = ""
+                primary_district = district_values.mode().iloc[0]
+            else:
+                primary_district = ""
 
         # Phones
         phone_values = group["Phone"].dropna().astype(str).tolist()
