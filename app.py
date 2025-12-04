@@ -618,8 +618,6 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         st.header("📊 Step 3: Batch Configuration & History")
         
         with st.expander("📜 Batch Configuration (Click to expand/collapse)", expanded=True):
-        
-        with st.expander("📜 Batch Configuration (Click to expand/collapse)", expanded=True):
             # Apply mappings
             gov_df_mapped = apply_column_mapping(gov_df, gov_mapping)
             ngo_df_mapped = apply_column_mapping(ngo_df, ngo_mapping)
