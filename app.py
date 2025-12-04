@@ -427,22 +427,24 @@ with col2:
 if excel_file or (gov_csv and ngo_csv and wa_csv):
     st.markdown("---")
     st.header("🔗 Step 2: Map Your Columns")
-    st.info("🎯 VERO can work with ANY column names! Map your columns to expected fields below.")
     
-    # Load data
-    if excel_file:
-        gov_df = load_excel_file(excel_file, gov_sheet)
-        ngo_df = load_excel_file(excel_file, ngo_sheet)
-        wa_df = load_excel_file(excel_file, wa_sheet)
-        gt_df = load_excel_file(excel_file, gt_sheet) if has_ground_truth and gt_sheet else None
-    else:
-        gov_df = pd.read_csv(gov_csv) if gov_csv else None
-        ngo_df = pd.read_csv(ngo_csv) if ngo_csv else None
-        wa_df = pd.read_csv(wa_csv) if wa_csv else None
-        gt_df = pd.read_csv(gt_csv) if gt_csv else None
-    
-    # Column mapping UI for facilities
-    st.subheader("🏢 Facility Data Mapping")
+    with st.expander("📋 Click to Map Columns", expanded=True):
+        st.info("🎯 VERO can work with ANY column names! Map your columns to expected fields below.")
+        
+        # Load data
+        if excel_file:
+            gov_df = load_excel_file(excel_file, gov_sheet)
+            ngo_df = load_excel_file(excel_file, ngo_sheet)
+            wa_df = load_excel_file(excel_file, wa_sheet)
+            gt_df = load_excel_file(excel_file, gt_sheet) if has_ground_truth and gt_sheet else None
+        else:
+            gov_df = pd.read_csv(gov_csv) if gov_csv else None
+            ngo_df = pd.read_csv(ngo_csv) if ngo_csv else None
+            wa_df = pd.read_csv(wa_csv) if wa_csv else None
+            gt_df = pd.read_csv(gt_csv) if gt_csv else None
+        
+        # Column mapping UI for facilities
+        st.subheader("🏢 Facility Data Mapping")
     
     if gov_df is not None:
         gov_mapping = column_mapper_ui(
@@ -504,58 +506,58 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
             source_key='wa'
         )
         st.session_state.column_mappings['wa'] = wa_mapping
-    
-    # Multi-entity person mapping
-    person_ngo_mapping = None
-    person_wa_mapping = None
-    
-    if enable_multi_entity:
+        
+        # Multi-entity person mapping
+        person_ngo_mapping = None
+        person_wa_mapping = None
+        
+        if enable_multi_entity:
+            st.markdown("---")
+            st.subheader("👤 Person Data Mapping (Multi-Entity)")
+            st.info("Map person/farmer fields from your data sources")
+            
+            # Check if NGO has person fields
+            if ngo_df is not None and ('FarmerName' in ngo_df.columns or any('name' in col.lower() for col in ngo_df.columns if col not in ['FacilityName'])):
+                person_ngo_mapping = column_mapper_ui(
+                    ngo_df,
+                    "NGO Persons",
+                    {
+                        'required': {
+                            'RecordID': 'Unique ID',
+                            'PersonName': 'Person/Farmer name',
+                            'District': 'District/location'
+                        },
+                        'optional': {
+                            'Phone': 'Phone number',
+                            'Gender': 'Gender',
+                            'Role': 'Role/occupation'
+                        }
+                    },
+                    source_key='person_ngo'
+                )
+            
+            # Check if WhatsApp has person fields
+            if wa_df is not None and ('ContactName' in wa_df.columns or any('contact' in col.lower() or 'person' in col.lower() for col in wa_df.columns)):
+                person_wa_mapping = column_mapper_ui(
+                    wa_df,
+                    "WhatsApp Persons",
+                    {
+                        'required': {
+                            'RecordID': 'Unique ID',
+                            'PersonName': 'Contact/Person name',
+                            'District': 'District/location'
+                        },
+                        'optional': {
+                            'Phone': 'Phone number',
+                            'Gender': 'Gender'
+                        }
+                    },
+                    source_key='person_wa'
+                )
+        
+        # Validate mappings
         st.markdown("---")
-        st.subheader("👤 Person Data Mapping (Multi-Entity)")
-        st.info("Map person/farmer fields from your data sources")
-        
-        # Check if NGO has person fields
-        if ngo_df is not None and ('FarmerName' in ngo_df.columns or any('name' in col.lower() for col in ngo_df.columns if col not in ['FacilityName'])):
-            person_ngo_mapping = column_mapper_ui(
-                ngo_df,
-                "NGO Persons",
-                {
-                    'required': {
-                        'RecordID': 'Unique ID',
-                        'PersonName': 'Person/Farmer name',
-                        'District': 'District/location'
-                    },
-                    'optional': {
-                        'Phone': 'Phone number',
-                        'Gender': 'Gender',
-                        'Role': 'Role/occupation'
-                    }
-                },
-                source_key='person_ngo'
-            )
-        
-        # Check if WhatsApp has person fields
-        if wa_df is not None and ('ContactName' in wa_df.columns or any('contact' in col.lower() or 'person' in col.lower() for col in wa_df.columns)):
-            person_wa_mapping = column_mapper_ui(
-                wa_df,
-                "WhatsApp Persons",
-                {
-                    'required': {
-                        'RecordID': 'Unique ID',
-                        'PersonName': 'Contact/Person name',
-                        'District': 'District/location'
-                    },
-                    'optional': {
-                        'Phone': 'Phone number',
-                        'Gender': 'Gender'
-                    }
-                },
-                source_key='person_wa'
-            )
-    
-    # Validate mappings
-    st.markdown("---")
-    st.subheader("✅ Validation")
+        st.subheader("✅ Validation")
     
     validation_cols = st.columns(3 if not enable_multi_entity else 5)
     
@@ -579,32 +581,33 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
             st.success("✅ WhatsApp: Ready")
         else:
             st.error(f"❌ WA missing: {', '.join(wa_missing)}")
-    
-    person_valid = True
-    if enable_multi_entity:
-        with validation_cols[3]:
-            if person_ngo_mapping:
-                person_ngo_missing = validate_mapping(person_ngo_mapping, ['RecordID', 'PersonName', 'District'])
-                if not person_ngo_missing:
-                    st.success("✅ NGO Persons: Ready")
-                else:
-                    st.warning(f"⚠️ NGO Persons: {', '.join(person_ngo_missing)}")
-                    person_valid = person_valid and False
-            else:
-                st.info("ℹ️ NGO Persons: Skipped")
         
-        with validation_cols[4]:
-            if person_wa_mapping:
-                person_wa_missing = validate_mapping(person_wa_mapping, ['RecordID', 'PersonName', 'District'])
-                if not person_wa_missing:
-                    st.success("✅ WA Persons: Ready")
+        person_valid = True
+        if enable_multi_entity:
+            with validation_cols[3]:
+                if person_ngo_mapping:
+                    person_ngo_missing = validate_mapping(person_ngo_mapping, ['RecordID', 'PersonName', 'District'])
+                    if not person_ngo_missing:
+                        st.success("✅ NGO Persons: Ready")
+                    else:
+                        st.warning(f"⚠️ NGO Persons: {', '.join(person_ngo_missing)}")
+                        person_valid = person_valid and False
                 else:
-                    st.warning(f"⚠️ WA Persons: {', '.join(person_wa_missing)}")
-                    person_valid = person_valid and False
-            else:
-                st.info("ℹ️ WA Persons: Skipped")
-    
-    all_valid = not gov_missing and not ngo_missing and not wa_missing
+                    st.info("ℹ️ NGO Persons: Skipped")
+            
+            with validation_cols[4]:
+                if person_wa_mapping:
+                    person_wa_missing = validate_mapping(person_wa_mapping, ['RecordID', 'PersonName', 'District'])
+                    if not person_wa_missing:
+                        st.success("✅ WA Persons: Ready")
+                    else:
+                        st.warning(f"⚠️ WA Persons: {', '.join(person_wa_missing)}")
+                        person_valid = person_valid and False
+                else:
+                    st.info("ℹ️ WA Persons: Skipped")
+        
+        all_valid = not gov_missing and not ngo_missing and not wa_missing
+    # END OF STEP 2 EXPANDER
     
     # ============================================================================
     # STEP 3: BATCH CONFIGURATION
@@ -614,90 +617,94 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         st.markdown("---")
         st.header("📊 Step 3: Batch Configuration & History")
         
-        # Apply mappings
-        gov_df_mapped = apply_column_mapping(gov_df, gov_mapping)
-        ngo_df_mapped = apply_column_mapping(ngo_df, ngo_mapping)
-        wa_df_mapped = apply_column_mapping(wa_df, wa_mapping)
+        with st.expander("📜 Batch Configuration (Click to expand/collapse)", expanded=True):
         
-        # Prepare extra entity sources for multi-entity
-        extra_entity_sources = []
-        
-        if enable_multi_entity and person_ngo_mapping:
-            person_ngo_df = apply_column_mapping(ngo_df, person_ngo_mapping)
-            extra_entity_sources.append({
-                "df": person_ngo_df,
-                "entity_type": "person",
-                "source_system": "NGO_Persons",
-                "name_col": "PersonName",
-                "district_col": "District",
-                "phone_col": "Phone" if "Phone" in person_ngo_mapping else None,
-                "record_id_col": "RecordID",
-                "extra_attribute_cols": ["Gender", "Role"] if "Gender" in person_ngo_mapping else []
-            })
-        
-        if enable_multi_entity and person_wa_mapping:
-            person_wa_df = apply_column_mapping(wa_df, person_wa_mapping)
-            extra_entity_sources.append({
-                "df": person_wa_df,
-                "entity_type": "person",
-                "source_system": "WhatsApp_Persons",
-                "name_col": "PersonName",
-                "district_col": "District",
-                "phone_col": "Phone" if "Phone" in person_wa_mapping else None,
-                "record_id_col": "RecordID",
-                "extra_attribute_cols": ["Gender"] if "Gender" in person_wa_mapping else []
-            })
-        
-        # Batch label input
-        batch_label = st.text_input(
-            "Batch label (for audit trail)",
-            value="Initial_Load",
-            help="Short name for this data drop, e.g., 'Morehouse_Malawi_Oct2025'"
-        )
-        
-        # Show ingestion history
-        with st.expander("📜 Ingestion History (Streaming Audit Trail)", expanded=True):
-            history = get_ingestion_history()
-            if len(history) == 0:
-                st.caption("No ingested batches yet. This will show all historical uploads.")
-            else:
-                st.dataframe(history, use_container_width=True)
-                st.caption(f"Total historical batches: {len(history)}")
-        
-        # Preview mapped data
-        with st.expander("👁️ Preview Mapped Data", expanded=False):
-            tabs = ["Government", "NGO", "WhatsApp"]
-            if enable_multi_entity:
-                if person_ngo_mapping:
-                    tabs.append("NGO Persons")
-                if person_wa_mapping:
-                    tabs.append("WhatsApp Persons")
+        with st.expander("📜 Batch Configuration (Click to expand/collapse)", expanded=True):
+            # Apply mappings
+            gov_df_mapped = apply_column_mapping(gov_df, gov_mapping)
+            ngo_df_mapped = apply_column_mapping(ngo_df, ngo_mapping)
+            wa_df_mapped = apply_column_mapping(wa_df, wa_mapping)
             
-            tab_objects = st.tabs(tabs)
+            # Prepare extra entity sources for multi-entity
+            extra_entity_sources = []
             
-            with tab_objects[0]:
-                st.dataframe(gov_df_mapped.head(5), use_container_width=True)
-                st.caption(f"Mapped batch: {len(gov_df_mapped)} records")
-            
-            with tab_objects[1]:
-                st.dataframe(ngo_df_mapped.head(5), use_container_width=True)
-                st.caption(f"Mapped batch: {len(ngo_df_mapped)} records")
-            
-            with tab_objects[2]:
-                st.dataframe(wa_df_mapped.head(5), use_container_width=True)
-                st.caption(f"Mapped batch: {len(wa_df_mapped)} records")
-            
-            tab_idx = 3
             if enable_multi_entity and person_ngo_mapping:
-                with tab_objects[tab_idx]:
-                    st.dataframe(person_ngo_df.head(5), use_container_width=True)
-                    st.caption(f"Person records: {len(person_ngo_df)}")
-                tab_idx += 1
+                person_ngo_df = apply_column_mapping(ngo_df, person_ngo_mapping)
+                extra_entity_sources.append({
+                    "df": person_ngo_df,
+                    "entity_type": "person",
+                    "source_system": "NGO_Persons",
+                    "name_col": "PersonName",
+                    "district_col": "District",
+                    "phone_col": "Phone" if "Phone" in person_ngo_mapping else None,
+                    "record_id_col": "RecordID",
+                    "extra_attribute_cols": ["Gender", "Role"] if "Gender" in person_ngo_mapping else []
+                })
             
             if enable_multi_entity and person_wa_mapping:
-                with tab_objects[tab_idx]:
-                    st.dataframe(person_wa_df.head(5), use_container_width=True)
-                    st.caption(f"Person records: {len(person_wa_df)}")
+                person_wa_df = apply_column_mapping(wa_df, person_wa_mapping)
+                extra_entity_sources.append({
+                    "df": person_wa_df,
+                    "entity_type": "person",
+                    "source_system": "WhatsApp_Persons",
+                    "name_col": "PersonName",
+                    "district_col": "District",
+                    "phone_col": "Phone" if "Phone" in person_wa_mapping else None,
+                    "record_id_col": "RecordID",
+                    "extra_attribute_cols": ["Gender"] if "Gender" in person_wa_mapping else []
+                })
+            
+            # Batch label input
+            batch_label = st.text_input(
+                "Batch label (for audit trail)",
+                value="Initial_Load",
+                help="Short name for this data drop, e.g., 'Morehouse_Malawi_Oct2025'"
+            )
+            
+            # Show ingestion history
+            with st.expander("📜 Ingestion History (Streaming Audit Trail)", expanded=False):
+                history = get_ingestion_history()
+                if len(history) == 0:
+                    st.caption("No ingested batches yet. This will show all historical uploads.")
+                else:
+                    st.dataframe(history, use_container_width=True)
+                    st.caption(f"Total historical batches: {len(history)}")
+            
+            # Preview mapped data
+            with st.expander("👁️ Preview Mapped Data", expanded=False):
+                tabs = ["Government", "NGO", "WhatsApp"]
+                if enable_multi_entity:
+                    if person_ngo_mapping:
+                        tabs.append("NGO Persons")
+                    if person_wa_mapping:
+                        tabs.append("WhatsApp Persons")
+                
+                tab_objects = st.tabs(tabs)
+                
+                with tab_objects[0]:
+                    st.dataframe(gov_df_mapped.head(5), use_container_width=True)
+                    st.caption(f"Mapped batch: {len(gov_df_mapped)} records")
+                
+                with tab_objects[1]:
+                    st.dataframe(ngo_df_mapped.head(5), use_container_width=True)
+                    st.caption(f"Mapped batch: {len(ngo_df_mapped)} records")
+                
+                with tab_objects[2]:
+                    st.dataframe(wa_df_mapped.head(5), use_container_width=True)
+                    st.caption(f"Mapped batch: {len(wa_df_mapped)} records")
+                
+                tab_idx = 3
+                if enable_multi_entity and person_ngo_mapping:
+                    with tab_objects[tab_idx]:
+                        st.dataframe(person_ngo_df.head(5), use_container_width=True)
+                        st.caption(f"Person records: {len(person_ngo_df)}")
+                    tab_idx += 1
+                
+                if enable_multi_entity and person_wa_mapping:
+                    with tab_objects[tab_idx]:
+                        st.dataframe(person_wa_df.head(5), use_container_width=True)
+                        st.caption(f"Person records: {len(person_wa_df)}")
+        # END OF STEP 3 EXPANDER
         
         # ============================================================================
         # STEP 4: INGEST & REBUILD
@@ -749,7 +756,8 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             extra_entity_sources=extra_entity_sources,
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
-                            district_threshold=district_threshold
+                            district_threshold=district_threshold,
+                            use_pretrained=True  # Use pre-trained model
                         )
                     else:
                         results = run_vero_pipeline(
@@ -759,7 +767,8 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             ground_truth_df=gt_df,
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
-                            district_threshold=district_threshold
+                            district_threshold=district_threshold,
+                            use_pretrained=True  # Use pre-trained model
                         )
                     
                     # 5) Enrich entity_clusters with batch metadata
