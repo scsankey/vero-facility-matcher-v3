@@ -1,7 +1,8 @@
 """
 app.py
 VERO.v3 - Streaming-Ready Entity Resolution Platform
-Upload → Batch Ingest → Rebuild Canonical → LLM Chat → Download
+Phase 1: FLEXIBLE COLUMN MAPPING - Works with ANY column names!
+Upload → Map Columns → Batch Ingest → Rebuild Canonical → LLM Chat → Download
 """
 
 import streamlit as st
@@ -41,6 +42,13 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
+    .mapping-box {
+        background-color: #f0f8ff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border: 1px solid #b0d4f1;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -57,16 +65,203 @@ def load_excel_file(uploaded_file, sheet_name):
         st.error(f"Error loading sheet '{sheet_name}': {str(e)}")
         return None
 
-def validate_dataframe(df, required_cols, dataset_name):
-    """Validate that dataframe has required columns"""
-    if df is None:
-        return False
+def apply_column_mapping(df, mapping):
+    """
+    Apply column mapping to dataframe.
     
-    missing_cols = [col for col in required_cols if col not in df.columns]
-    if missing_cols:
-        st.error(f"{dataset_name} is missing columns: {', '.join(missing_cols)}")
-        return False
-    return True
+    mapping: dict like {'RecordID': 'user_id_col', 'Name': 'user_name_col', ...}
+    Returns: DataFrame with renamed columns
+    """
+    if df is None:
+        return None
+    
+    df_mapped = df.copy()
+    
+    # Rename columns based on mapping
+    reverse_mapping = {v: k for k, v in mapping.items() if v != "-- Skip --"}
+    df_mapped = df_mapped.rename(columns=reverse_mapping)
+    
+    # Add missing required columns as None/empty
+    required_cols = list(mapping.keys())
+    for col in required_cols:
+        if col not in df_mapped.columns:
+            df_mapped[col] = None
+    
+    return df_mapped
+
+def column_mapper_ui(df, source_name, default_mapping=None, source_key=None):
+    """
+    Streamlit UI component for mapping columns.
+    
+    Returns: dict of {standard_col: user_selected_col}
+    """
+    if df is None:
+        return {}
+    
+    st.markdown(f'<div class="mapping-box">', unsafe_allow_html=True)
+    
+    # Check if we have saved mapping for this source
+    saved_mapping = st.session_state.saved_mappings.get(source_key) if source_key else None
+    
+    # Header with saved mapping indicator
+    col_header, col_action = st.columns([3, 1])
+    with col_header:
+        st.subheader(f"🔗 Map Columns: {source_name}")
+    with col_action:
+        if saved_mapping:
+            st.caption("✅ Previous mapping available")
+    
+    # Option to use saved mapping
+    use_saved = False
+    if saved_mapping:
+        col_use, col_clear = st.columns([3, 1])
+        with col_use:
+            use_saved = st.checkbox(
+                "📋 Use previous mapping",
+                value=st.session_state.use_saved_mapping.get(source_key, True),
+                key=f"use_saved_{source_key}",
+                help="Auto-fill with last used mapping"
+            )
+        with col_clear:
+            if st.button("🗑️ Clear", key=f"clear_{source_key}", help="Clear saved mapping"):
+                st.session_state.saved_mappings[source_key] = None
+                st.rerun()
+    
+    # Define required fields and optional fields
+    if source_name == "Government":
+        required_fields = {
+            'RecordID': 'Unique ID for each record',
+            'OfficialFacilityName': 'Official facility name',
+            'District': 'District/region location'
+        }
+        optional_fields = {
+            'AltName': 'Alternative name',
+            'Phone': 'Phone number',
+            'GPS_Lat': 'GPS Latitude',
+            'GPS_Lon': 'GPS Longitude'
+        }
+    elif source_name == "NGO":
+        required_fields = {
+            'RecordID': 'Unique ID for each record',
+            'FacilityName': 'Facility name',
+            'District': 'District/region location'
+        }
+        optional_fields = {
+            'Phone': 'Phone number',
+            'FarmerName': 'Person/farmer name',
+            'Gender': 'Gender'
+        }
+    elif source_name == "WhatsApp":
+        required_fields = {
+            'RecordID': 'Unique ID for each record',
+            'RelatedFacility': 'Related facility name',
+            'DistrictNote': 'District/location note'
+        }
+        optional_fields = {
+            'Phone': 'Phone number',
+            'ContactName': 'Contact person name',
+            'LocationNickname': 'Location nickname'
+        }
+    else:
+        required_fields = {
+            'RecordID': 'Unique ID',
+            'Name': 'Entity name',
+            'District': 'Location'
+        }
+        optional_fields = {}
+    
+    available_cols = ["-- Skip --"] + list(df.columns)
+    mapping = {}
+    
+    # Determine which default mapping to use
+    effective_mapping = saved_mapping if (use_saved and saved_mapping) else default_mapping
+    
+    # Required fields
+    st.markdown("**Required Fields:**")
+    cols_required = st.columns(len(required_fields))
+    
+    for idx, (field, description) in enumerate(required_fields.items()):
+        with cols_required[idx]:
+            # Try to find matching column
+            default_idx = 0
+            
+            # Priority 1: Saved/default mapping
+            if effective_mapping and field in effective_mapping:
+                try:
+                    default_idx = available_cols.index(effective_mapping[field])
+                except ValueError:
+                    default_idx = 0
+            # Priority 2: Exact column name match
+            elif field in df.columns:
+                default_idx = available_cols.index(field)
+            # Priority 3: Smart matching
+            else:
+                for col in df.columns:
+                    if field.lower() in col.lower() or col.lower() in field.lower():
+                        default_idx = available_cols.index(col)
+                        break
+            
+            selected = st.selectbox(
+                f"{field}",
+                available_cols,
+                index=default_idx,
+                help=description,
+                key=f"{source_name}_{field}_{source_key}"
+            )
+            mapping[field] = selected
+    
+    # Optional fields in expander
+    if optional_fields:
+        with st.expander("➕ Optional Fields (Click to Map)"):
+            for field, description in optional_fields.items():
+                # Try to find matching column
+                default_idx = 0
+                
+                if effective_mapping and field in effective_mapping:
+                    try:
+                        default_idx = available_cols.index(effective_mapping[field])
+                    except ValueError:
+                        default_idx = 0
+                elif field in df.columns:
+                    default_idx = available_cols.index(field)
+                else:
+                    # Smart matching
+                    for col in df.columns:
+                        if field.lower() in col.lower() or col.lower() in field.lower():
+                            default_idx = available_cols.index(col)
+                            break
+                
+                selected = st.selectbox(
+                    f"{field}",
+                    available_cols,
+                    index=default_idx,
+                    help=description,
+                    key=f"{source_name}_{field}_{source_key}"
+                )
+                if selected != "-- Skip --":
+                    mapping[field] = selected
+    
+    # Save this mapping for future use
+    if source_key and mapping:
+        st.session_state.saved_mappings[source_key] = mapping.copy()
+    
+    # Show preview
+    with st.expander("👁️ Preview Mapped Data"):
+        mapped_df = apply_column_mapping(df, mapping)
+        display_cols = [col for col in mapping.keys() if col in mapped_df.columns]
+        st.dataframe(mapped_df[display_cols].head(3), use_container_width=True)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    return mapping
+
+def validate_mapping(mapping, required_fields):
+    """Validate that all required fields are mapped"""
+    missing = []
+    for field in required_fields:
+        if field not in mapping or mapping[field] == "-- Skip --":
+            missing.append(field)
+    return missing
 
 def to_excel(dataframes_dict):
     """Convert multiple dataframes to Excel with multiple sheets"""
@@ -156,13 +351,28 @@ with st.sidebar:
 # ============================================================================
 
 st.markdown('<div class="main-header">🏥 VERO Entity Resolution</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Streaming-Ready Canonical Identity Fabric</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Streaming-Ready Canonical Identity Fabric | Phase 1: Flexible Column Mapping</div>', unsafe_allow_html=True)
 
 # Initialize session state
 if 'results' not in st.session_state:
     st.session_state.results = None
 if 'confirm_clear' not in st.session_state:
     st.session_state.confirm_clear = False
+if 'column_mappings' not in st.session_state:
+    st.session_state.column_mappings = {}
+if 'saved_mappings' not in st.session_state:
+    # Persistent mappings across sessions (per source type)
+    st.session_state.saved_mappings = {
+        'gov': None,
+        'ngo': None,
+        'wa': None
+    }
+if 'use_saved_mapping' not in st.session_state:
+    st.session_state.use_saved_mapping = {
+        'gov': True,
+        'ngo': True,
+        'wa': True
+    }
 
 # Initialize storage
 init_storage()
@@ -171,7 +381,8 @@ init_storage()
 # STEP 1: FILE UPLOAD
 # ============================================================================
 
-st.header("📤 Step 1: Upload Your Data (Batch Ingestion)")
+st.header("📤 Step 1: Upload Your Data")
+st.caption("✨ NEW: Works with ANY column names! Map your columns to VERO's expected fields.")
 
 col1, col2 = st.columns(2)
 
@@ -180,25 +391,25 @@ with col1:
     excel_file = st.file_uploader(
         "Upload Excel with multiple sheets",
         type=['xlsx', 'xls'],
-        help="Should contain: Government registry, NGO Dataset, WhatsApp Dataset"
+        help="Can contain any sheet names - you'll select which to use"
     )
     
     if excel_file:
         try:
             excel_sheets = pd.ExcelFile(excel_file).sheet_names
-            st.success(f"✅ Found {len(excel_sheets)} sheets")
+            st.success(f"✅ Found {len(excel_sheets)} sheets: {', '.join(excel_sheets)}")
             
-            gov_sheet = st.selectbox("Government Registry", excel_sheets, 
+            gov_sheet = st.selectbox("Government Registry Sheet", excel_sheets, 
                                     index=excel_sheets.index('Government registry') if 'Government registry' in excel_sheets else 0)
-            ngo_sheet = st.selectbox("NGO Dataset", excel_sheets,
+            ngo_sheet = st.selectbox("NGO Dataset Sheet", excel_sheets,
                                     index=excel_sheets.index('NGO Dataset') if 'NGO Dataset' in excel_sheets else 0)
-            wa_sheet = st.selectbox("WhatsApp Dataset", excel_sheets,
+            wa_sheet = st.selectbox("WhatsApp Dataset Sheet", excel_sheets,
                                    index=excel_sheets.index('WhatsApp Dataset') if 'WhatsApp Dataset' in excel_sheets else 0)
             
             has_ground_truth = st.checkbox("Include Ground Truth for Training")
             gt_sheet = None
             if has_ground_truth:
-                gt_sheet = st.selectbox("Ground Truth", excel_sheets,
+                gt_sheet = st.selectbox("Ground Truth Sheet", excel_sheets,
                                        index=excel_sheets.index('Sankey GTP') if 'Sankey GTP' in excel_sheets else 0)
             
         except Exception as e:
@@ -212,28 +423,13 @@ with col2:
     gt_csv = st.file_uploader("Ground Truth CSV (optional)", type=['csv'], key="gt")
 
 # ============================================================================
-# STEP 2: BATCH LABELING & INGESTION HISTORY
+# STEP 2: COLUMN MAPPING (NEW!)
 # ============================================================================
 
 if excel_file or (gov_csv and ngo_csv and wa_csv):
     st.markdown("---")
-    st.header("📊 Step 2: Batch Configuration & History")
-    
-    # Batch label input
-    batch_label = st.text_input(
-        "Batch label (for audit trail)",
-        value="Initial_Load",
-        help="Short name for this data drop, e.g., 'Morehouse_Malawi_Oct2025'"
-    )
-    
-    # Show ingestion history
-    with st.expander("📜 Ingestion History (Streaming Audit Trail)", expanded=True):
-        history = get_ingestion_history()
-        if len(history) == 0:
-            st.caption("No ingested batches yet. This will show all historical uploads.")
-        else:
-            st.dataframe(history, use_container_width=True)
-            st.caption(f"Total historical batches: {len(history)}")
+    st.header("🔗 Step 2: Map Your Columns (NEW!)")
+    st.info("🎯 VERO can now work with ANY column names! Just map your columns to the expected fields below.")
     
     # Load data
     if excel_file:
@@ -247,50 +443,130 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         wa_df = pd.read_csv(wa_csv) if wa_csv else None
         gt_df = pd.read_csv(gt_csv) if gt_csv else None
     
-    # Validate
-    valid_gov = validate_dataframe(gov_df, ['RecordID', 'OfficialFacilityName', 'District'], "Government")
-    valid_ngo = validate_dataframe(ngo_df, ['RecordID', 'FacilityName', 'District'], "NGO")
-    valid_wa = validate_dataframe(wa_df, ['RecordID', 'RelatedFacility', 'DistrictNote'], "WhatsApp")
+    # Column mapping UI
+    if gov_df is not None:
+        gov_mapping = column_mapper_ui(
+            gov_df, 
+            "Government",
+            st.session_state.column_mappings.get('gov', None),
+            source_key='gov'
+        )
+        st.session_state.column_mappings['gov'] = gov_mapping
     
-    if valid_gov and valid_ngo and valid_wa:
-        # Preview current batch
-        with st.expander("👁️ Preview Current Batch", expanded=False):
+    if ngo_df is not None:
+        ngo_mapping = column_mapper_ui(
+            ngo_df, 
+            "NGO",
+            st.session_state.column_mappings.get('ngo', None),
+            source_key='ngo'
+        )
+        st.session_state.column_mappings['ngo'] = ngo_mapping
+    
+    if wa_df is not None:
+        wa_mapping = column_mapper_ui(
+            wa_df, 
+            "WhatsApp",
+            st.session_state.column_mappings.get('wa', None),
+            source_key='wa'
+        )
+        st.session_state.column_mappings['wa'] = wa_mapping
+    
+    # Validate mappings
+    st.markdown("---")
+    st.subheader("✅ Validation")
+    
+    col_val1, col_val2, col_val3 = st.columns(3)
+    
+    with col_val1:
+        gov_missing = validate_mapping(gov_mapping, ['RecordID', 'OfficialFacilityName', 'District'])
+        if not gov_missing:
+            st.success("✅ Government: All required fields mapped")
+        else:
+            st.error(f"❌ Government missing: {', '.join(gov_missing)}")
+    
+    with col_val2:
+        ngo_missing = validate_mapping(ngo_mapping, ['RecordID', 'FacilityName', 'District'])
+        if not ngo_missing:
+            st.success("✅ NGO: All required fields mapped")
+        else:
+            st.error(f"❌ NGO missing: {', '.join(ngo_missing)}")
+    
+    with col_val3:
+        wa_missing = validate_mapping(wa_mapping, ['RecordID', 'RelatedFacility', 'DistrictNote'])
+        if not wa_missing:
+            st.success("✅ WhatsApp: All required fields mapped")
+        else:
+            st.error(f"❌ WhatsApp missing: {', '.join(wa_missing)}")
+    
+    all_valid = not gov_missing and not ngo_missing and not wa_missing
+    
+    # ============================================================================
+    # STEP 3: BATCH LABELING & INGESTION HISTORY
+    # ============================================================================
+    
+    if all_valid:
+        st.markdown("---")
+        st.header("📊 Step 3: Batch Configuration & History")
+        
+        # Apply mappings
+        gov_df_mapped = apply_column_mapping(gov_df, gov_mapping)
+        ngo_df_mapped = apply_column_mapping(ngo_df, ngo_mapping)
+        wa_df_mapped = apply_column_mapping(wa_df, wa_mapping)
+        
+        # Batch label input
+        batch_label = st.text_input(
+            "Batch label (for audit trail)",
+            value="Initial_Load",
+            help="Short name for this data drop, e.g., 'Morehouse_Malawi_Oct2025'"
+        )
+        
+        # Show ingestion history
+        with st.expander("📜 Ingestion History (Streaming Audit Trail)", expanded=True):
+            history = get_ingestion_history()
+            if len(history) == 0:
+                st.caption("No ingested batches yet. This will show all historical uploads.")
+            else:
+                st.dataframe(history, use_container_width=True)
+                st.caption(f"Total historical batches: {len(history)}")
+        
+        # Preview mapped data
+        with st.expander("👁️ Preview Mapped Data", expanded=False):
             t1, t2, t3 = st.tabs(["Government", "NGO", "WhatsApp"])
             
             with t1:
-                st.dataframe(gov_df.head(5), use_container_width=True)
-                st.caption(f"Current batch: {len(gov_df)} records")
+                st.dataframe(gov_df_mapped.head(5), use_container_width=True)
+                st.caption(f"Mapped batch: {len(gov_df_mapped)} records")
             
             with t2:
-                st.dataframe(ngo_df.head(5), use_container_width=True)
-                st.caption(f"Current batch: {len(ngo_df)} records")
+                st.dataframe(ngo_df_mapped.head(5), use_container_width=True)
+                st.caption(f"Mapped batch: {len(ngo_df_mapped)} records")
             
             with t3:
-                st.dataframe(wa_df.head(5), use_container_width=True)
-                st.caption(f"Current batch: {len(wa_df)} records")
+                st.dataframe(wa_df_mapped.head(5), use_container_width=True)
+                st.caption(f"Mapped batch: {len(wa_df_mapped)} records")
         
         # ============================================================================
-        # STEP 3: INGEST & REBUILD CANONICAL REGISTRY
+        # STEP 4: INGEST & REBUILD CANONICAL REGISTRY
         # ============================================================================
         
         st.markdown("---")
-        st.header("🚀 Step 3: Ingest & Rebuild Canonical Registry")
+        st.header("🚀 Step 4: Ingest & Rebuild Canonical Registry")
         
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Current Batch: Government", len(gov_df))
+            st.metric("Current Batch: Government", len(gov_df_mapped))
         with col2:
-            st.metric("Current Batch: NGO", len(ngo_df))
+            st.metric("Current Batch: NGO", len(ngo_df_mapped))
         with col3:
-            st.metric("Current Batch: WhatsApp", len(wa_df))
+            st.metric("Current Batch: WhatsApp", len(wa_df_mapped))
         
         if st.button("📥 Ingest & Rebuild Canonical Registry", type="primary", use_container_width=True):
             with st.spinner("Ingesting batch and rebuilding canonical registry..."):
                 try:
                     # 1) Add this batch into storage
-                    add_batch("Gov", gov_df, batch_label=batch_label + "_GOV")
-                    add_batch("NGO", ngo_df, batch_label=batch_label + "_NGO")
-                    add_batch("WhatsApp", wa_df, batch_label=batch_label + "_WA")
+                    add_batch("Gov", gov_df_mapped, batch_label=batch_label + "_GOV")
+                    add_batch("NGO", ngo_df_mapped, batch_label=batch_label + "_NGO")
+                    add_batch("WhatsApp", wa_df_mapped, batch_label=batch_label + "_WA")
                     
                     st.info("✅ Batch ingested into storage")
                     
@@ -330,14 +606,14 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     st.code(traceback.format_exc())
 
 # ============================================================================
-# STEP 4: DISPLAY RESULTS
+# STEP 5: DISPLAY RESULTS (Same as before)
 # ============================================================================
 
 if st.session_state.results:
     results = st.session_state.results
     
     st.markdown("---")
-    st.header("📈 Step 4: Results & Insights")
+    st.header("📈 Step 5: Results & Insights")
     
     # Extract data
     canonical = results.get("canonical_entities", pd.DataFrame())
@@ -570,8 +846,8 @@ if st.session_state.results:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
-    <p><strong>VERO - Entity Resolution Platform</strong></p>
-    <p>Streaming-Ready Canonical Identity Fabric | ADIP v1.0</p>
+    <p><strong>VERO - Entity Resolution Platform v4.0.4 + Phase 1 Column Mapping</strong></p>
+    <p>Streaming-Ready Canonical Identity Fabric | Works with ANY column names!</p>
     <p>© 2025</p>
 </div>
 """, unsafe_allow_html=True)
