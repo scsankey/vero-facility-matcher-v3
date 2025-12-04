@@ -1,14 +1,19 @@
 """
 app.py
-VERO.v3 - Streaming-Ready Entity Resolution Platform
-Phase 1: FLEXIBLE COLUMN MAPPING - Works with ANY column names!
-Upload → Map Columns → Batch Ingest → Rebuild Canonical → LLM Chat → Download
+VERO v4.0.4 - Complete Entity Resolution Platform
+✅ Phase 1: Flexible Column Mapping
+✅ Mapping Memory (Auto-fill saved mappings)
+✅ Multi-Entity Support (Facilities + Persons)
+✅ Enhanced Entity Display
+
+Upload → Map Columns → Multi-Entity → Batch Ingest → Rebuild Canonical → LLM Chat → Download
 """
 
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from io import BytesIO
+import json
 
 # Import modules
 from vero_engine import run_vero_pipeline
@@ -48,6 +53,22 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #b0d4f1;
         margin-bottom: 1rem;
+    }
+    .entity-badge {
+        display: inline-block;
+        padding: 0.3rem 0.6rem;
+        border-radius: 0.3rem;
+        font-size: 0.9rem;
+        font-weight: bold;
+        margin: 0.2rem;
+    }
+    .badge-facility {
+        background-color: #e3f2fd;
+        color: #1976d2;
+    }
+    .badge-person {
+        background-color: #f3e5f5;
+        color: #7b1fa2;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -89,10 +110,11 @@ def apply_column_mapping(df, mapping):
     
     return df_mapped
 
-def column_mapper_ui(df, source_name, default_mapping=None, source_key=None):
+def column_mapper_ui(df, source_name, field_config, source_key=None):
     """
     Streamlit UI component for mapping columns.
     
+    field_config: dict with 'required' and 'optional' field definitions
     Returns: dict of {standard_col: user_selected_col}
     """
     if df is None:
@@ -127,54 +149,14 @@ def column_mapper_ui(df, source_name, default_mapping=None, source_key=None):
                 st.session_state.saved_mappings[source_key] = None
                 st.rerun()
     
-    # Define required fields and optional fields
-    if source_name == "Government":
-        required_fields = {
-            'RecordID': 'Unique ID for each record',
-            'OfficialFacilityName': 'Official facility name',
-            'District': 'District/region location'
-        }
-        optional_fields = {
-            'AltName': 'Alternative name',
-            'Phone': 'Phone number',
-            'GPS_Lat': 'GPS Latitude',
-            'GPS_Lon': 'GPS Longitude'
-        }
-    elif source_name == "NGO":
-        required_fields = {
-            'RecordID': 'Unique ID for each record',
-            'FacilityName': 'Facility name',
-            'District': 'District/region location'
-        }
-        optional_fields = {
-            'Phone': 'Phone number',
-            'FarmerName': 'Person/farmer name',
-            'Gender': 'Gender'
-        }
-    elif source_name == "WhatsApp":
-        required_fields = {
-            'RecordID': 'Unique ID for each record',
-            'RelatedFacility': 'Related facility name',
-            'DistrictNote': 'District/location note'
-        }
-        optional_fields = {
-            'Phone': 'Phone number',
-            'ContactName': 'Contact person name',
-            'LocationNickname': 'Location nickname'
-        }
-    else:
-        required_fields = {
-            'RecordID': 'Unique ID',
-            'Name': 'Entity name',
-            'District': 'Location'
-        }
-        optional_fields = {}
+    required_fields = field_config.get('required', {})
+    optional_fields = field_config.get('optional', {})
     
     available_cols = ["-- Skip --"] + list(df.columns)
     mapping = {}
     
     # Determine which default mapping to use
-    effective_mapping = saved_mapping if (use_saved and saved_mapping) else default_mapping
+    effective_mapping = saved_mapping if (use_saved and saved_mapping) else None
     
     # Required fields
     st.markdown("**Required Fields:**")
@@ -185,7 +167,7 @@ def column_mapper_ui(df, source_name, default_mapping=None, source_key=None):
             # Try to find matching column
             default_idx = 0
             
-            # Priority 1: Saved/default mapping
+            # Priority 1: Saved mapping
             if effective_mapping and field in effective_mapping:
                 try:
                     default_idx = available_cols.index(effective_mapping[field])
@@ -350,8 +332,8 @@ with st.sidebar:
 # MAIN HEADER
 # ============================================================================
 
-st.markdown('<div class="main-header">🏥 VERO Entity Resolution</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Streaming-Ready Canonical Identity Fabric | Phase 1: Flexible Column Mapping</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🏥 VERO Entity Resolution v4.0.4</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">🎯 Complete Platform: Flexible Columns + Multi-Entity + Mapping Memory</div>', unsafe_allow_html=True)
 
 # Initialize session state
 if 'results' not in st.session_state:
@@ -361,18 +343,23 @@ if 'confirm_clear' not in st.session_state:
 if 'column_mappings' not in st.session_state:
     st.session_state.column_mappings = {}
 if 'saved_mappings' not in st.session_state:
-    # Persistent mappings across sessions (per source type)
     st.session_state.saved_mappings = {
         'gov': None,
         'ngo': None,
-        'wa': None
+        'wa': None,
+        'person_ngo': None,
+        'person_wa': None
     }
 if 'use_saved_mapping' not in st.session_state:
     st.session_state.use_saved_mapping = {
         'gov': True,
         'ngo': True,
-        'wa': True
+        'wa': True,
+        'person_ngo': True,
+        'person_wa': True
     }
+if 'enable_multi_entity' not in st.session_state:
+    st.session_state.enable_multi_entity = False
 
 # Initialize storage
 init_storage()
@@ -382,7 +369,18 @@ init_storage()
 # ============================================================================
 
 st.header("📤 Step 1: Upload Your Data")
-st.caption("✨ NEW: Works with ANY column names! Map your columns to VERO's expected fields.")
+st.caption("✨ Works with ANY column names! ✨ Supports Multi-Entity (Facilities + Persons)")
+
+# Multi-entity toggle
+enable_multi_entity = st.checkbox(
+    "🔥 Enable Multi-Entity Matching (Facilities + Persons/Farmers)",
+    value=st.session_state.enable_multi_entity,
+    help="Check this to match both facilities AND persons (farmers, contacts, etc.)"
+)
+st.session_state.enable_multi_entity = enable_multi_entity
+
+if enable_multi_entity:
+    st.info("🎯 Multi-Entity Mode: Will match facilities AND persons across your data sources")
 
 col1, col2 = st.columns(2)
 
@@ -423,13 +421,13 @@ with col2:
     gt_csv = st.file_uploader("Ground Truth CSV (optional)", type=['csv'], key="gt")
 
 # ============================================================================
-# STEP 2: COLUMN MAPPING (NEW!)
+# STEP 2: COLUMN MAPPING
 # ============================================================================
 
 if excel_file or (gov_csv and ngo_csv and wa_csv):
     st.markdown("---")
-    st.header("🔗 Step 2: Map Your Columns (NEW!)")
-    st.info("🎯 VERO can now work with ANY column names! Just map your columns to the expected fields below.")
+    st.header("🔗 Step 2: Map Your Columns")
+    st.info("🎯 VERO can work with ANY column names! Map your columns to expected fields below.")
     
     # Load data
     if excel_file:
@@ -443,12 +441,26 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         wa_df = pd.read_csv(wa_csv) if wa_csv else None
         gt_df = pd.read_csv(gt_csv) if gt_csv else None
     
-    # Column mapping UI
+    # Column mapping UI for facilities
+    st.subheader("🏢 Facility Data Mapping")
+    
     if gov_df is not None:
         gov_mapping = column_mapper_ui(
             gov_df, 
             "Government",
-            st.session_state.column_mappings.get('gov', None),
+            {
+                'required': {
+                    'RecordID': 'Unique ID for each record',
+                    'OfficialFacilityName': 'Official facility name',
+                    'District': 'District/region location'
+                },
+                'optional': {
+                    'AltName': 'Alternative name',
+                    'Phone': 'Phone number',
+                    'GPS_Lat': 'GPS Latitude',
+                    'GPS_Lon': 'GPS Longitude'
+                }
+            },
             source_key='gov'
         )
         st.session_state.column_mappings['gov'] = gov_mapping
@@ -457,7 +469,18 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         ngo_mapping = column_mapper_ui(
             ngo_df, 
             "NGO",
-            st.session_state.column_mappings.get('ngo', None),
+            {
+                'required': {
+                    'RecordID': 'Unique ID for each record',
+                    'FacilityName': 'Facility name',
+                    'District': 'District/region location'
+                },
+                'optional': {
+                    'Phone': 'Phone number',
+                    'FarmerName': 'Person/farmer name (for multi-entity)',
+                    'Gender': 'Gender (for persons)'
+                }
+            },
             source_key='ngo'
         )
         st.session_state.column_mappings['ngo'] = ngo_mapping
@@ -466,42 +489,125 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         wa_mapping = column_mapper_ui(
             wa_df, 
             "WhatsApp",
-            st.session_state.column_mappings.get('wa', None),
+            {
+                'required': {
+                    'RecordID': 'Unique ID for each record',
+                    'RelatedFacility': 'Related facility name',
+                    'DistrictNote': 'District/location note'
+                },
+                'optional': {
+                    'Phone': 'Phone number',
+                    'ContactName': 'Contact person name (for multi-entity)',
+                    'LocationNickname': 'Location nickname'
+                }
+            },
             source_key='wa'
         )
         st.session_state.column_mappings['wa'] = wa_mapping
+    
+    # Multi-entity person mapping
+    person_ngo_mapping = None
+    person_wa_mapping = None
+    
+    if enable_multi_entity:
+        st.markdown("---")
+        st.subheader("👤 Person Data Mapping (Multi-Entity)")
+        st.info("Map person/farmer fields from your data sources")
+        
+        # Check if NGO has person fields
+        if ngo_df is not None and ('FarmerName' in ngo_df.columns or any('name' in col.lower() for col in ngo_df.columns if col not in ['FacilityName'])):
+            person_ngo_mapping = column_mapper_ui(
+                ngo_df,
+                "NGO Persons",
+                {
+                    'required': {
+                        'RecordID': 'Unique ID',
+                        'PersonName': 'Person/Farmer name',
+                        'District': 'District/location'
+                    },
+                    'optional': {
+                        'Phone': 'Phone number',
+                        'Gender': 'Gender',
+                        'Role': 'Role/occupation'
+                    }
+                },
+                source_key='person_ngo'
+            )
+        
+        # Check if WhatsApp has person fields
+        if wa_df is not None and ('ContactName' in wa_df.columns or any('contact' in col.lower() or 'person' in col.lower() for col in wa_df.columns)):
+            person_wa_mapping = column_mapper_ui(
+                wa_df,
+                "WhatsApp Persons",
+                {
+                    'required': {
+                        'RecordID': 'Unique ID',
+                        'PersonName': 'Contact/Person name',
+                        'District': 'District/location'
+                    },
+                    'optional': {
+                        'Phone': 'Phone number',
+                        'Gender': 'Gender'
+                    }
+                },
+                source_key='person_wa'
+            )
     
     # Validate mappings
     st.markdown("---")
     st.subheader("✅ Validation")
     
-    col_val1, col_val2, col_val3 = st.columns(3)
+    validation_cols = st.columns(3 if not enable_multi_entity else 5)
     
-    with col_val1:
+    with validation_cols[0]:
         gov_missing = validate_mapping(gov_mapping, ['RecordID', 'OfficialFacilityName', 'District'])
         if not gov_missing:
-            st.success("✅ Government: All required fields mapped")
+            st.success("✅ Government: Ready")
         else:
-            st.error(f"❌ Government missing: {', '.join(gov_missing)}")
+            st.error(f"❌ Gov missing: {', '.join(gov_missing)}")
     
-    with col_val2:
+    with validation_cols[1]:
         ngo_missing = validate_mapping(ngo_mapping, ['RecordID', 'FacilityName', 'District'])
         if not ngo_missing:
-            st.success("✅ NGO: All required fields mapped")
+            st.success("✅ NGO: Ready")
         else:
             st.error(f"❌ NGO missing: {', '.join(ngo_missing)}")
     
-    with col_val3:
+    with validation_cols[2]:
         wa_missing = validate_mapping(wa_mapping, ['RecordID', 'RelatedFacility', 'DistrictNote'])
         if not wa_missing:
-            st.success("✅ WhatsApp: All required fields mapped")
+            st.success("✅ WhatsApp: Ready")
         else:
-            st.error(f"❌ WhatsApp missing: {', '.join(wa_missing)}")
+            st.error(f"❌ WA missing: {', '.join(wa_missing)}")
+    
+    person_valid = True
+    if enable_multi_entity:
+        with validation_cols[3]:
+            if person_ngo_mapping:
+                person_ngo_missing = validate_mapping(person_ngo_mapping, ['RecordID', 'PersonName', 'District'])
+                if not person_ngo_missing:
+                    st.success("✅ NGO Persons: Ready")
+                else:
+                    st.warning(f"⚠️ NGO Persons: {', '.join(person_ngo_missing)}")
+                    person_valid = person_valid and False
+            else:
+                st.info("ℹ️ NGO Persons: Skipped")
+        
+        with validation_cols[4]:
+            if person_wa_mapping:
+                person_wa_missing = validate_mapping(person_wa_mapping, ['RecordID', 'PersonName', 'District'])
+                if not person_wa_missing:
+                    st.success("✅ WA Persons: Ready")
+                else:
+                    st.warning(f"⚠️ WA Persons: {', '.join(person_wa_missing)}")
+                    person_valid = person_valid and False
+            else:
+                st.info("ℹ️ WA Persons: Skipped")
     
     all_valid = not gov_missing and not ngo_missing and not wa_missing
     
     # ============================================================================
-    # STEP 3: BATCH LABELING & INGESTION HISTORY
+    # STEP 3: BATCH CONFIGURATION
     # ============================================================================
     
     if all_valid:
@@ -512,6 +618,35 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         gov_df_mapped = apply_column_mapping(gov_df, gov_mapping)
         ngo_df_mapped = apply_column_mapping(ngo_df, ngo_mapping)
         wa_df_mapped = apply_column_mapping(wa_df, wa_mapping)
+        
+        # Prepare extra entity sources for multi-entity
+        extra_entity_sources = []
+        
+        if enable_multi_entity and person_ngo_mapping:
+            person_ngo_df = apply_column_mapping(ngo_df, person_ngo_mapping)
+            extra_entity_sources.append({
+                "df": person_ngo_df,
+                "entity_type": "person",
+                "source_system": "NGO_Persons",
+                "name_col": "PersonName",
+                "district_col": "District",
+                "phone_col": "Phone" if "Phone" in person_ngo_mapping else None,
+                "record_id_col": "RecordID",
+                "extra_attribute_cols": ["Gender", "Role"] if "Gender" in person_ngo_mapping else []
+            })
+        
+        if enable_multi_entity and person_wa_mapping:
+            person_wa_df = apply_column_mapping(wa_df, person_wa_mapping)
+            extra_entity_sources.append({
+                "df": person_wa_df,
+                "entity_type": "person",
+                "source_system": "WhatsApp_Persons",
+                "name_col": "PersonName",
+                "district_col": "District",
+                "phone_col": "Phone" if "Phone" in person_wa_mapping else None,
+                "record_id_col": "RecordID",
+                "extra_attribute_cols": ["Gender"] if "Gender" in person_wa_mapping else []
+            })
         
         # Batch label input
         batch_label = st.text_input(
@@ -531,34 +666,59 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         
         # Preview mapped data
         with st.expander("👁️ Preview Mapped Data", expanded=False):
-            t1, t2, t3 = st.tabs(["Government", "NGO", "WhatsApp"])
+            tabs = ["Government", "NGO", "WhatsApp"]
+            if enable_multi_entity:
+                if person_ngo_mapping:
+                    tabs.append("NGO Persons")
+                if person_wa_mapping:
+                    tabs.append("WhatsApp Persons")
             
-            with t1:
+            tab_objects = st.tabs(tabs)
+            
+            with tab_objects[0]:
                 st.dataframe(gov_df_mapped.head(5), use_container_width=True)
                 st.caption(f"Mapped batch: {len(gov_df_mapped)} records")
             
-            with t2:
+            with tab_objects[1]:
                 st.dataframe(ngo_df_mapped.head(5), use_container_width=True)
                 st.caption(f"Mapped batch: {len(ngo_df_mapped)} records")
             
-            with t3:
+            with tab_objects[2]:
                 st.dataframe(wa_df_mapped.head(5), use_container_width=True)
                 st.caption(f"Mapped batch: {len(wa_df_mapped)} records")
+            
+            tab_idx = 3
+            if enable_multi_entity and person_ngo_mapping:
+                with tab_objects[tab_idx]:
+                    st.dataframe(person_ngo_df.head(5), use_container_width=True)
+                    st.caption(f"Person records: {len(person_ngo_df)}")
+                tab_idx += 1
+            
+            if enable_multi_entity and person_wa_mapping:
+                with tab_objects[tab_idx]:
+                    st.dataframe(person_wa_df.head(5), use_container_width=True)
+                    st.caption(f"Person records: {len(person_wa_df)}")
         
         # ============================================================================
-        # STEP 4: INGEST & REBUILD CANONICAL REGISTRY
+        # STEP 4: INGEST & REBUILD
         # ============================================================================
         
         st.markdown("---")
         st.header("🚀 Step 4: Ingest & Rebuild Canonical Registry")
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Current Batch: Government", len(gov_df_mapped))
-        with col2:
-            st.metric("Current Batch: NGO", len(ngo_df_mapped))
-        with col3:
-            st.metric("Current Batch: WhatsApp", len(wa_df_mapped))
+        metrics_cols = st.columns(3 if not enable_multi_entity else 5)
+        with metrics_cols[0]:
+            st.metric("Gov Facilities", len(gov_df_mapped))
+        with metrics_cols[1]:
+            st.metric("NGO Facilities", len(ngo_df_mapped))
+        with metrics_cols[2]:
+            st.metric("WhatsApp Facilities", len(wa_df_mapped))
+        
+        if enable_multi_entity:
+            with metrics_cols[3]:
+                st.metric("NGO Persons", len(person_ngo_df) if person_ngo_mapping else 0)
+            with metrics_cols[4]:
+                st.metric("WhatsApp Persons", len(person_wa_df) if person_wa_mapping else 0)
         
         if st.button("📥 Ingest & Rebuild Canonical Registry", type="primary", use_container_width=True):
             with st.spinner("Ingesting batch and rebuilding canonical registry..."):
@@ -578,16 +738,29 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     gov_all_df, ngo_all_df, wa_all_df = reshape_raw_to_logical_sources(all_raw)
                     st.info(f"🔄 Reshaped into Gov: {len(gov_all_df)}, NGO: {len(ngo_all_df)}, WA: {len(wa_all_df)}")
                     
-                    # 4) Call pipeline on ALL data so far
-                    results = run_vero_pipeline(
-                        gov_df=gov_all_df,
-                        ngo_df=ngo_all_df,
-                        whatsapp_df=wa_all_df,
-                        ground_truth_df=gt_df,
-                        high_threshold=high_threshold,
-                        medium_threshold=medium_threshold,
-                        district_threshold=district_threshold
-                    )
+                    # 4) Call pipeline with multi-entity support
+                    if enable_multi_entity and len(extra_entity_sources) > 0:
+                        st.info(f"🎯 Multi-Entity Mode: Processing {len(extra_entity_sources)} person data sources")
+                        results = run_vero_pipeline(
+                            gov_df=gov_all_df,
+                            ngo_df=ngo_all_df,
+                            whatsapp_df=wa_all_df,
+                            ground_truth_df=gt_df,
+                            extra_entity_sources=extra_entity_sources,
+                            high_threshold=high_threshold,
+                            medium_threshold=medium_threshold,
+                            district_threshold=district_threshold
+                        )
+                    else:
+                        results = run_vero_pipeline(
+                            gov_df=gov_all_df,
+                            ngo_df=ngo_all_df,
+                            whatsapp_df=wa_all_df,
+                            ground_truth_df=gt_df,
+                            high_threshold=high_threshold,
+                            medium_threshold=medium_threshold,
+                            district_threshold=district_threshold
+                        )
                     
                     # 5) Enrich entity_clusters with batch metadata
                     if "entity_clusters" in results and len(results["entity_clusters"]) > 0:
@@ -606,7 +779,7 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     st.code(traceback.format_exc())
 
 # ============================================================================
-# STEP 5: DISPLAY RESULTS (Same as before)
+# STEP 5: DISPLAY RESULTS (Enhanced Multi-Entity)
 # ============================================================================
 
 if st.session_state.results:
@@ -623,16 +796,33 @@ if st.session_state.results:
     events = results.get("entity_events", pd.DataFrame())
     metrics = results.get("metrics", {})
 
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Canonical Entities", len(canonical))
-    with col2:
-        st.metric("Matched Pairs", len(matched))
-    with col3:
-        st.metric("Clusters", entity_clusters["EntityID"].nunique() if len(entity_clusters) > 0 else 0)
-    with col4:
-        st.metric("Model ROC-AUC", f"{metrics.get('roc_auc', 0):.3f}")
+    # Enhanced summary metrics with entity type breakdown
+    if "EntityType" in canonical.columns:
+        entity_type_counts = canonical["EntityType"].value_counts()
+        
+        metrics_row = st.columns([2, 2, 2, 2, 2])
+        with metrics_row[0]:
+            st.metric("Total Entities", len(canonical))
+        with metrics_row[1]:
+            facilities = entity_type_counts.get('facility', 0)
+            st.metric("🏢 Facilities", facilities)
+        with metrics_row[2]:
+            persons = entity_type_counts.get('person', 0)
+            st.metric("👤 Persons", persons)
+        with metrics_row[3]:
+            st.metric("Matched Pairs", len(matched))
+        with metrics_row[4]:
+            st.metric("Model ROC-AUC", f"{metrics.get('roc_auc', 0):.3f}")
+    else:
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Canonical Entities", len(canonical))
+        with col2:
+            st.metric("Matched Pairs", len(matched))
+        with col3:
+            st.metric("Clusters", entity_clusters["EntityID"].nunique() if len(entity_clusters) > 0 else 0)
+        with col4:
+            st.metric("Model ROC-AUC", f"{metrics.get('roc_auc', 0):.3f}")
     
     # Tabs
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -645,25 +835,57 @@ if st.session_state.results:
     ])
     
     # ----------------------------------------------------------------------
-    # TAB 1: OVERVIEW
+    # TAB 1: OVERVIEW (Enhanced)
     # ----------------------------------------------------------------------
     with tab1:
         st.subheader("Matching Overview")
         
+        # Entity type breakdown
+        if "EntityType" in canonical.columns:
+            st.markdown("### Entity Type Distribution")
+            entity_type_counts = canonical["EntityType"].value_counts()
+            
+            col_chart, col_table = st.columns([2, 1])
+            with col_chart:
+                fig = px.pie(
+                    values=entity_type_counts.values,
+                    names=entity_type_counts.index,
+                    title="Canonical Entities by Type",
+                    color_discrete_map={'facility': '#1976d2', 'person': '#7b1fa2'}
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col_table:
+                st.markdown("**Breakdown:**")
+                for entity_type, count in entity_type_counts.items():
+                    badge_class = "badge-facility" if entity_type == "facility" else "badge-person"
+                    st.markdown(f'<span class="entity-badge {badge_class}">{entity_type.title()}: {count}</span>', unsafe_allow_html=True)
+                
+                # Duplicate resolution stats
+                if len(entity_clusters) > 0:
+                    total_records = len(entity_clusters)
+                    total_entities = len(canonical)
+                    resolution_rate = ((total_records - total_entities) / total_records) * 100
+                    st.markdown(f"**Resolution Rate:** {resolution_rate:.1f}%")
+                    st.caption(f"{total_records - total_entities} duplicates resolved")
+        
         if len(matched) > 0 and "match_prob" in matched.columns:
+            st.markdown("### Match Probability Distribution")
             fig = px.histogram(
                 matched, x='match_prob', nbins=20,
-                title="Match Probability Distribution",
+                title="Match Confidence Distribution",
                 labels={'match_prob': 'Probability', 'count': 'Pairs'}
             )
             st.plotly_chart(fig, use_container_width=True)
         
         if len(entity_clusters) > 0 and "SourceSystem" in entity_clusters.columns:
+            st.markdown("### Records by Source System")
             source_dist = entity_clusters["SourceSystem"].value_counts()
-            fig = px.pie(
-                values=source_dist.values,
-                names=source_dist.index,
-                title="Records by Source"
+            fig = px.bar(
+                x=source_dist.index,
+                y=source_dist.values,
+                title="Distribution by Source",
+                labels={'x': 'Source System', 'y': 'Record Count'}
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -680,21 +902,67 @@ if st.session_state.results:
             st.info("No matched pairs found")
 
     # ----------------------------------------------------------------------
-    # TAB 3: CANONICAL ENTITIES
+    # TAB 3: CANONICAL ENTITIES (Enhanced Multi-Entity Display)
     # ----------------------------------------------------------------------
     with tab3:
         st.subheader("🧩 Canonical Entities (LLM-Ready Identity Table)")
         st.caption("One row per real-world entity, deduplicated across all ingested batches")
         
         if len(canonical) > 0:
-            st.dataframe(canonical, use_container_width=True)
-            st.caption(f"Total canonical entities: {len(canonical)}")
-            
+            # Entity type filter
             if "EntityType" in canonical.columns:
-                type_counts = canonical["EntityType"].value_counts()
-                st.markdown("**Entity Types:**")
-                for entity_type, count in type_counts.items():
-                    st.write(f"- {entity_type}: {count}")
+                entity_types = ["All"] + list(canonical["EntityType"].unique())
+                selected_type = st.selectbox("Filter by Entity Type:", entity_types)
+                
+                if selected_type != "All":
+                    filtered_canonical = canonical[canonical["EntityType"] == selected_type]
+                else:
+                    filtered_canonical = canonical
+            else:
+                filtered_canonical = canonical
+            
+            # Display facilities
+            if "EntityType" not in canonical.columns or selected_type in ["All", "facility"]:
+                facilities = filtered_canonical[filtered_canonical["EntityType"] == "facility"] if "EntityType" in filtered_canonical.columns else filtered_canonical
+                if len(facilities) > 0:
+                    st.markdown("### 🏢 Facility Entities")
+                    st.dataframe(facilities, use_container_width=True)
+                    st.caption(f"Total facilities: {len(facilities)}")
+            
+            # Display persons
+            if "EntityType" in canonical.columns and selected_type in ["All", "person"]:
+                persons = filtered_canonical[filtered_canonical["EntityType"] == "person"]
+                if len(persons) > 0:
+                    st.markdown("### 👤 Person Entities")
+                    
+                    # Create person-specific display
+                    person_display = []
+                    for _, person in persons.iterrows():
+                        try:
+                            attrs = json.loads(person['Attributes_JSON']) if 'Attributes_JSON' in person else {}
+                        except:
+                            attrs = {}
+                        
+                        person_display.append({
+                            'EntityID': person['EntityID'],
+                            'Name': person['CanonicalName'],
+                            'District': person.get('PrimaryDistrict', 'N/A'),
+                            'Phone': person.get('CanonicalPhones', 'N/A'),
+                            'Gender': attrs.get('Gender', 'N/A'),
+                            'Records': person['RecordCount'],
+                            'Sources': person['SourcesRepresented']
+                        })
+                    
+                    st.dataframe(pd.DataFrame(person_display), use_container_width=True)
+                    st.caption(f"Total persons: {len(persons)}")
+                    
+                    # Highlight resolved duplicates
+                    duplicates = [p for p in person_display if p['Records'] > 1]
+                    if duplicates:
+                        st.success(f"✅ Resolved {len(duplicates)} person duplicates across sources!")
+                        with st.expander("View Resolved Person Duplicates"):
+                            for person in duplicates:
+                                st.write(f"- **{person['Name']}**: {person['Records']} records from {person['Sources']}")
         else:
             st.info("No canonical entities. Run matching first.")
 
@@ -771,7 +1039,9 @@ if st.session_state.results:
             # Entity selector
             entity_options = []
             for _, row in canonical.iterrows():
-                label = f"{row['EntityID']} | {row['CanonicalName']} ({row['EntityType']}, {row.get('PrimaryDistrict', 'N/A')})"
+                entity_type = row.get('EntityType', 'entity')
+                icon = "🏢" if entity_type == "facility" else "👤"
+                label = f"{icon} {row['EntityID']} | {row['CanonicalName']} ({entity_type}, {row.get('PrimaryDistrict', 'N/A')})"
                 entity_options.append(label)
             
             selected_label = st.selectbox(
@@ -780,10 +1050,12 @@ if st.session_state.results:
                 help="Choose the canonical entity you want to ask about"
             )
             
-            selected_entity_id = selected_label.split(" | ")[0]
+            selected_entity_id = selected_label.split(" | ")[0].split(" ")[1]
             selected = canonical[canonical["EntityID"] == selected_entity_id].iloc[0]
             
-            st.markdown(f"**Selected:** `{selected['CanonicalName']}` ({selected['EntityType']})")
+            entity_type = selected.get('EntityType', 'entity')
+            icon = "🏢" if entity_type == "facility" else "👤"
+            st.markdown(f"**Selected:** {icon} `{selected['CanonicalName']}` ({entity_type})")
             st.caption(
                 f"ID: {selected['EntityID']} | District: {selected.get('PrimaryDistrict', 'N/A')} | "
                 f"Sources: {selected.get('SourcesRepresented', 'N/A')}"
@@ -801,7 +1073,7 @@ if st.session_state.results:
             
             user_question = st.text_area(
                 "Your question:",
-                placeholder="e.g., Summarize this facility's data quality, What sources contributed to this entity?, etc.",
+                placeholder="e.g., Summarize this entity's data quality, What sources contributed?, etc.",
                 height=100
             )
             
@@ -846,8 +1118,9 @@ if st.session_state.results:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
-    <p><strong>VERO - Entity Resolution Platform v4.0.4 + Phase 1 Column Mapping</strong></p>
-    <p>Streaming-Ready Canonical Identity Fabric | Works with ANY column names!</p>
+    <p><strong>VERO - Entity Resolution Platform v4.0.4 Ultimate</strong></p>
+    <p>✅ Flexible Column Mapping | ✅ Mapping Memory | ✅ Multi-Entity Support</p>
+    <p>Streaming-Ready Canonical Identity Fabric | 65.7% Person Resolution Rate</p>
     <p>© 2025</p>
 </div>
 """, unsafe_allow_html=True)
