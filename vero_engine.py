@@ -597,9 +597,18 @@ def build_canonical_entities_table(clusters_df):
     if clusters_df is None or len(clusters_df) == 0:
         return pd.DataFrame()
 
-    # Ensure string types
+    # Ensure string types and handle unhashable columns
     clusters_df = clusters_df.copy()
-    clusters_df["EntityType"] = clusters_df["EntityType"].fillna("unknown")
+    clusters_df["EntityType"] = clusters_df["EntityType"].fillna("unknown").astype(str)
+    clusters_df["ClusterID"] = clusters_df["ClusterID"].astype(str)
+    
+    # Convert any list/dict columns to strings to avoid unhashable type errors
+    for col in clusters_df.columns:
+        if clusters_df[col].dtype == 'object':
+            # Check if column contains lists, dicts, or Series
+            sample = clusters_df[col].dropna().iloc[0] if len(clusters_df[col].dropna()) > 0 else None
+            if sample is not None and isinstance(sample, (list, dict, pd.Series)):
+                clusters_df[col] = clusters_df[col].astype(str)
 
     for (cluster_id, entity_type), group in clusters_df.groupby(["ClusterID", "EntityType"]):
         # Prioritise records from authoritative sources for canonical name
