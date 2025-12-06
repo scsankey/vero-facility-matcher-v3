@@ -20,6 +20,7 @@ from vero_engine import run_vero_pipeline
 from llm_backend import answer_entity_question, get_llm_status
 from storage import init_storage, add_batch, load_all_raw, get_ingestion_history, get_storage_stats, clear_storage
 from transformations import reshape_raw_to_logical_sources, enrich_with_ingest_metadata
+from smart_mapper import smart_auto_map, get_mapping_summary, SmartColumnMapper
 
 st.set_page_config(
     page_title="VERO - Entity Resolution",
@@ -110,7 +111,68 @@ def apply_column_mapping(df, mapping):
     
     return df_mapped
 
-def column_mapper_ui(df, source_name, field_config, source_key=None):
+        with col4:
+            st.markdown("✅")
+    
+    # Optional fields in expander
+    if optional_fields:
+        with st.expander("➕ Optional Fields (Click to review/edit)"):
+            for field, description in optional_fields.items():
+                col1, col2, col3 = st.columns([2, 3, 2])
+                
+                with col1:
+                    st.markdown(f"`{field}`")
+                    st.caption(description)
+                
+                with col2:
+                    initial_value = initial_mapping.get(field, "-- Skip --")
+                    try:
+                        default_idx = available_cols.index(initial_value)
+                    except ValueError:
+                        default_idx = 0
+                    
+                    selected = st.selectbox(
+                        f"Map {field}",
+                        available_cols,
+                        index=default_idx,
+                        key=f"smart_map_{source_key}_{field}_opt",
+                        label_visibility="collapsed"
+                    )
+                    if selected != "-- Skip --":
+                        mapping[field] = selected
+                
+                with col3:
+                    score = confidence_scores.get(field, 0)
+                    if selected != "-- Skip --":
+                        if score >= 90:
+                            st.success(f"✅ {score:.0f}%")
+                        elif score >= 70:
+                            st.warning(f"⚠️ {score:.0f}%")
+                        else:
+                            st.info(f"ℹ️ Manual")
+    
+    # Save this mapping for future use
+    if source_key and mapping:
+        st.session_state.saved_mappings[source_key] = mapping.copy()
+    
+    # Show preview of mapped data
+    st.markdown("---")
+    with st.expander("👁️ Preview Mapped Data"):
+        mapped_df = apply_column_mapping(df, mapping)
+        display_cols = [col for col in mapping.keys() if col in mapped_df.columns]
+        
+        if display_cols:
+            st.dataframe(mapped_df[display_cols].head(3), use_container_width=True)
+            
+            # Show mapping summary
+            st.caption(f"**Mapped:** {len([v for v in mapping.values() if v != '-- Skip --'])} columns | "
+                      f"**Skipped:** {len([v for v in mapping.values() if v == '-- Skip --'])} columns")
+        else:
+            st.warning("No columns mapped yet")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    return mapping
     """
     Streamlit UI component for mapping columns.
     
