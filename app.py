@@ -807,11 +807,24 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     
                     # 4) Call pipeline with multi-entity support
                     # Determine if we should use pretrained model
-                    # Only use pretrained if we have ground truth OR if pretrained model exists
-                    use_pretrained_model = gt_df is not None
+                    # use_pretrained=True when NO ground truth (uses saved model)
+                    # use_pretrained=False when ground truth provided (trains new model)
+                    use_pretrained_flag = gt_df is None or len(gt_df) == 0
                     
-                    if not use_pretrained_model:
-                        st.warning("⚠️ No ground truth provided - using rule-based matching only")
+                    # DIAGNOSTIC LOGGING
+                    st.info("🔍 **Pipeline Configuration:**")
+                    st.write(f"- Ground truth provided: {gt_df is not None}")
+                    if gt_df is not None:
+                        st.write(f"- Ground truth rows: {len(gt_df)}")
+                        st.write(f"- Ground truth columns: {list(gt_df.columns)}")
+                    st.write(f"- use_pretrained flag: {use_pretrained_flag}")
+                    st.write(f"- Mode: {'Pretrained Model' if use_pretrained_flag else 'Train from Ground Truth'}")
+                    
+                    if gt_df is not None and len(gt_df) > 0:
+                        st.success(f"✅ Ground truth loaded: {len(gt_df)} labeled pairs")
+                        st.info("🎯 Pipeline will train NEW model from ground truth")
+                    else:
+                        st.info("🎯 Pipeline will use PRETRAINED model (no ground truth)")
                     
                     if enable_multi_entity and len(extra_entity_sources) > 0:
                         st.info(f"🎯 Multi-Entity Mode: Processing {len(extra_entity_sources)} person data sources")
@@ -824,7 +837,7 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
                             district_threshold=district_threshold,
-                            use_pretrained=use_pretrained_model
+                            use_pretrained=use_pretrained_flag
                         )
                     else:
                         results = run_vero_pipeline(
@@ -835,7 +848,7 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
                             district_threshold=district_threshold,
-                            use_pretrained=use_pretrained_model
+                            use_pretrained=use_pretrained_flag
                         )
                     
                     # 5) Enrich entity_clusters with batch metadata
