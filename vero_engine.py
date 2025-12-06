@@ -129,8 +129,13 @@ def prepare_unified_dataset(
             for col in gov_df.columns:
                 if col not in ["RecordID", "OfficialFacilityName", "AltName", "District"]:
                     attrs[col] = r.get(col, None)
+            
+            # Future-proof: Always prefix RecordID with entity_type and source
+            # Ensures uniqueness across all entity types (facility, person, farm, tractor, etc.)
+            unique_record_id = f"facility_Gov_{r['RecordID']}"
+            
             rows.append({
-                "RecordID": str(r["RecordID"]),
+                "RecordID": str(unique_record_id),
                 "EntityType": "facility",
                 "Name": r.get("OfficialFacilityName", ""),
                 "AltName": r.get("AltName", None),
@@ -146,8 +151,12 @@ def prepare_unified_dataset(
             for col in ngo_df.columns:
                 if col not in ["RecordID", "FacilityName", "District", "Phone"]:
                     attrs[col] = r.get(col, None)
+            
+            # Future-proof: Always prefix RecordID with entity_type and source
+            unique_record_id = f"facility_NGO_{r['RecordID']}"
+            
             rows.append({
-                "RecordID": str(r["RecordID"]),
+                "RecordID": str(unique_record_id),
                 "EntityType": "facility",
                 "Name": r.get("FacilityName", ""),
                 "AltName": None,
@@ -163,8 +172,12 @@ def prepare_unified_dataset(
             for col in whatsapp_df.columns:
                 if col not in ["RecordID", "RelatedFacility", "DistrictNote", "Phone", "LocationNickname"]:
                     attrs[col] = r.get(col, None)
+            
+            # Future-proof: Always prefix RecordID with entity_type and source
+            unique_record_id = f"facility_WhatsApp_{r['RecordID']}"
+            
             rows.append({
-                "RecordID": str(r["RecordID"]),
+                "RecordID": str(unique_record_id),
                 "EntityType": "facility",
                 "Name": r.get("RelatedFacility", ""),
                 "AltName": r.get("LocationNickname", None),
@@ -194,8 +207,12 @@ def prepare_unified_dataset(
                 for col in extra_cols:
                     attrs[col] = r.get(col, None)
 
+                # Make RecordID unique by prefixing with entity_type and source_system
+                # This prevents conflicts when same RecordID is used for both facility and person
+                unique_record_id = f"{ent_type}_{src}_{r[record_id_col]}"
+
                 rows.append({
-                    "RecordID": str(r[record_id_col]),
+                    "RecordID": str(unique_record_id),
                     "EntityType": ent_type,
                     "Name": r.get(name_col, ""),
                     "AltName": r.get(alt_name_col, None) if alt_name_col else None,
