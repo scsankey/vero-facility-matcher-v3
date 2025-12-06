@@ -806,6 +806,13 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                     st.info(f"🔄 Reshaped into Gov: {len(gov_all_df)}, NGO: {len(ngo_all_df)}, WA: {len(wa_all_df)}")
                     
                     # 4) Call pipeline with multi-entity support
+                    # Determine if we should use pretrained model
+                    # Only use pretrained if we have ground truth OR if pretrained model exists
+                    use_pretrained_model = gt_df is not None
+                    
+                    if not use_pretrained_model:
+                        st.warning("⚠️ No ground truth provided - using rule-based matching only")
+                    
                     if enable_multi_entity and len(extra_entity_sources) > 0:
                         st.info(f"🎯 Multi-Entity Mode: Processing {len(extra_entity_sources)} person data sources")
                         results = run_vero_pipeline(
@@ -817,7 +824,7 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
                             district_threshold=district_threshold,
-                            use_pretrained=True  # Use pre-trained model
+                            use_pretrained=use_pretrained_model
                         )
                     else:
                         results = run_vero_pipeline(
@@ -828,7 +835,7 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
                             high_threshold=high_threshold,
                             medium_threshold=medium_threshold,
                             district_threshold=district_threshold,
-                            use_pretrained=True  # Use pre-trained model
+                            use_pretrained=use_pretrained_model
                         )
                     
                     # 5) Enrich entity_clusters with batch metadata
