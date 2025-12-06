@@ -5,6 +5,7 @@ VERO v4.0.4 - Complete Entity Resolution Platform
 ✅ Mapping Memory (Auto-fill saved mappings)
 ✅ Multi-Entity Support (Facilities + Persons)
 ✅ Enhanced Entity Display
+✅ Smart Auto-Mapping with HITL
 
 Upload → Map Columns → Multi-Entity → Batch Ingest → Rebuild Canonical → LLM Chat → Download
 """
@@ -111,6 +112,130 @@ def apply_column_mapping(df, mapping):
     
     return df_mapped
 
+def column_mapper_ui(df, source_name, field_config, source_key=None):
+    """
+    Smart column mapping UI with auto-detection and HITL editing
+    
+    Features:
+    - Auto-maps columns with high confidence
+    - Shows confidence scores
+    - Allows editing of mappings
+    - Visual indicators for match quality
+    """
+    if df is None:
+        return {}
+    
+    st.markdown(f'<div class="mapping-box">', unsafe_allow_html=True)
+    
+    # Check if we have saved mapping for this source
+    saved_mapping = st.session_state.saved_mappings.get(source_key) if source_key else None
+    
+    # Header
+    st.subheader(f"🔗 Map Columns: {source_name}")
+    
+    required_fields = field_config.get('required', {})
+    optional_fields = field_config.get('optional', {})
+    
+    # Determine which mapping to use as starting point
+    if saved_mapping:
+        # Use saved mapping
+        st.info("📋 Using previously saved mapping (you can edit below)")
+        initial_mapping = saved_mapping
+        confidence_scores = {k: 100 for k in saved_mapping.keys()}  # Saved = 100% confidence
+        match_methods = {k: "saved_mapping" for k in saved_mapping.keys()}
+    else:
+        # Smart auto-map
+        with st.spinner("🤖 Auto-detecting column mappings..."):
+            initial_mapping, confidence_scores, match_methods = smart_auto_map(
+                df, 
+                required_fields, 
+                optional_fields,
+                confidence_threshold=70
+            )
+        
+        # Show auto-mapping summary
+        summary = get_mapping_summary(initial_mapping, confidence_scores, match_methods)
+        
+        if summary['mapping_rate'] >= 80:
+            st.success(f"✅ Auto-mapped {summary['auto_mapped']}/{summary['total_fields']} columns ({summary['mapping_rate']:.0f}%)")
+        elif summary['mapping_rate'] >= 50:
+            st.warning(f"⚠️ Auto-mapped {summary['auto_mapped']}/{summary['total_fields']} columns ({summary['mapping_rate']:.0f}%) - Please review")
+        else:
+            st.info(f"ℹ️ Auto-mapped {summary['auto_mapped']}/{summary['total_fields']} columns ({summary['mapping_rate']:.0f}%) - Manual mapping needed")
+    
+    # HITL Preview & Edit Section
+    st.markdown("---")
+    st.markdown("### 🎯 Review & Edit Mappings")
+    st.caption("Auto-detected mappings shown below. Edit if needed.")
+    
+    available_cols = ["-- Skip --"] + list(df.columns)
+    mapping = {}
+    
+    # Create editable mapping table
+    col1, col2, col3, col4 = st.columns([2, 3, 2, 1])
+    
+    with col1:
+        st.markdown("**Standard Field**")
+    with col2:
+        st.markdown("**Your Column**")
+    with col3:
+        st.markdown("**Confidence**")
+    with col4:
+        st.markdown("**Required**")
+    
+    st.markdown("---")
+    
+    # Required fields first
+    st.markdown("**📌 Required Fields:**")
+    for field, description in required_fields.items():
+        col1, col2, col3, col4 = st.columns([2, 3, 2, 1])
+        
+        with col1:
+            st.markdown(f"`{field}`")
+            st.caption(description)
+        
+        with col2:
+            # Get initial value
+            initial_value = initial_mapping.get(field, "-- Skip --")
+            try:
+                default_idx = available_cols.index(initial_value)
+            except ValueError:
+                default_idx = 0
+            
+            # Editable dropdown
+            selected = st.selectbox(
+                f"Map {field}",
+                available_cols,
+                index=default_idx,
+                key=f"smart_map_{source_key}_{field}",
+                label_visibility="collapsed"
+            )
+            mapping[field] = selected
+        
+        with col3:
+            # Show confidence score
+            score = confidence_scores.get(field, 0)
+            method = match_methods.get(field, "unknown")
+            
+            if score >= 90:
+                st.success(f"✅ {score:.0f}%")
+            elif score >= 70:
+                st.warning(f"⚠️ {score:.0f}%")
+            elif selected != "-- Skip --":
+                st.info(f"ℹ️ Manual")
+            else:
+                st.error(f"❌ {score:.0f}%")
+            
+            # Show match method as tooltip
+            if method == "exact_match":
+                st.caption("🎯 Exact")
+            elif method == "synonym_match":
+                st.caption("📚 Synonym")
+            elif "fuzzy" in method:
+                st.caption("🔍 Fuzzy")
+            elif method == "saved_mapping":
+                st.caption("💾 Saved")
+        
         with col4:
             st.markdown("✅")
     
@@ -169,131 +294,6 @@ def apply_column_mapping(df, mapping):
                       f"**Skipped:** {len([v for v in mapping.values() if v == '-- Skip --'])} columns")
         else:
             st.warning("No columns mapped yet")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    return mapping
-    """
-    Streamlit UI component for mapping columns.
-    
-    field_config: dict with 'required' and 'optional' field definitions
-    Returns: dict of {standard_col: user_selected_col}
-    """
-    if df is None:
-        return {}
-    
-    st.markdown(f'<div class="mapping-box">', unsafe_allow_html=True)
-    
-    # Check if we have saved mapping for this source
-    saved_mapping = st.session_state.saved_mappings.get(source_key) if source_key else None
-    
-    # Header with saved mapping indicator
-    col_header, col_action = st.columns([3, 1])
-    with col_header:
-        st.subheader(f"🔗 Map Columns: {source_name}")
-    with col_action:
-        if saved_mapping:
-            st.caption("✅ Previous mapping available")
-    
-    # Option to use saved mapping
-    use_saved = False
-    if saved_mapping:
-        col_use, col_clear = st.columns([3, 1])
-        with col_use:
-            use_saved = st.checkbox(
-                "📋 Use previous mapping",
-                value=st.session_state.use_saved_mapping.get(source_key, True),
-                key=f"use_saved_{source_key}",
-                help="Auto-fill with last used mapping"
-            )
-        with col_clear:
-            if st.button("🗑️ Clear", key=f"clear_{source_key}", help="Clear saved mapping"):
-                st.session_state.saved_mappings[source_key] = None
-                st.rerun()
-    
-    required_fields = field_config.get('required', {})
-    optional_fields = field_config.get('optional', {})
-    
-    available_cols = ["-- Skip --"] + list(df.columns)
-    mapping = {}
-    
-    # Determine which default mapping to use
-    effective_mapping = saved_mapping if (use_saved and saved_mapping) else None
-    
-    # Required fields
-    st.markdown("**Required Fields:**")
-    cols_required = st.columns(len(required_fields))
-    
-    for idx, (field, description) in enumerate(required_fields.items()):
-        with cols_required[idx]:
-            # Try to find matching column
-            default_idx = 0
-            
-            # Priority 1: Saved mapping
-            if effective_mapping and field in effective_mapping:
-                try:
-                    default_idx = available_cols.index(effective_mapping[field])
-                except ValueError:
-                    default_idx = 0
-            # Priority 2: Exact column name match
-            elif field in df.columns:
-                default_idx = available_cols.index(field)
-            # Priority 3: Smart matching
-            else:
-                for col in df.columns:
-                    if field.lower() in col.lower() or col.lower() in field.lower():
-                        default_idx = available_cols.index(col)
-                        break
-            
-            selected = st.selectbox(
-                f"{field}",
-                available_cols,
-                index=default_idx,
-                help=description,
-                key=f"{source_name}_{field}_{source_key}"
-            )
-            mapping[field] = selected
-    
-    # Optional fields in expander
-    if optional_fields:
-        with st.expander("➕ Optional Fields (Click to Map)"):
-            for field, description in optional_fields.items():
-                # Try to find matching column
-                default_idx = 0
-                
-                if effective_mapping and field in effective_mapping:
-                    try:
-                        default_idx = available_cols.index(effective_mapping[field])
-                    except ValueError:
-                        default_idx = 0
-                elif field in df.columns:
-                    default_idx = available_cols.index(field)
-                else:
-                    # Smart matching
-                    for col in df.columns:
-                        if field.lower() in col.lower() or col.lower() in field.lower():
-                            default_idx = available_cols.index(col)
-                            break
-                
-                selected = st.selectbox(
-                    f"{field}",
-                    available_cols,
-                    index=default_idx,
-                    help=description,
-                    key=f"{source_name}_{field}_{source_key}"
-                )
-                if selected != "-- Skip --":
-                    mapping[field] = selected
-    
-    # Save this mapping for future use
-    if source_key and mapping:
-        st.session_state.saved_mappings[source_key] = mapping.copy()
-    
-    # Show preview
-    with st.expander("👁️ Preview Mapped Data"):
-        mapped_df = apply_column_mapping(df, mapping)
-        display_cols = [col for col in mapping.keys() if col in mapped_df.columns]
-        st.dataframe(mapped_df[display_cols].head(3), use_container_width=True)
     
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -395,7 +395,7 @@ with st.sidebar:
 # ============================================================================
 
 st.markdown('<div class="main-header">🏥 VERO Entity Resolution v4.0.4</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">🎯 Complete Platform: Flexible Columns + Multi-Entity + Mapping Memory</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">🎯 Complete Platform: Flexible Columns + Multi-Entity + Smart Auto-Mapping</div>', unsafe_allow_html=True)
 
 # Initialize session state
 if 'results' not in st.session_state:
@@ -507,67 +507,67 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         
         # Column mapping UI for facilities
         st.subheader("🏢 Facility Data Mapping")
-    
-    if gov_df is not None:
-        gov_mapping = column_mapper_ui(
-            gov_df, 
-            "Government",
-            {
-                'required': {
-                    'RecordID': 'Unique ID for each record',
-                    'OfficialFacilityName': 'Official facility name',
-                    'District': 'District/region location'
+        
+        if gov_df is not None:
+            gov_mapping = column_mapper_ui(
+                gov_df, 
+                "Government",
+                {
+                    'required': {
+                        'RecordID': 'Unique ID for each record',
+                        'OfficialFacilityName': 'Official facility name',
+                        'District': 'District/region location'
+                    },
+                    'optional': {
+                        'AltName': 'Alternative name',
+                        'Phone': 'Phone number',
+                        'GPS_Lat': 'GPS Latitude',
+                        'GPS_Lon': 'GPS Longitude'
+                    }
                 },
-                'optional': {
-                    'AltName': 'Alternative name',
-                    'Phone': 'Phone number',
-                    'GPS_Lat': 'GPS Latitude',
-                    'GPS_Lon': 'GPS Longitude'
-                }
-            },
-            source_key='gov'
-        )
-        st.session_state.column_mappings['gov'] = gov_mapping
-    
-    if ngo_df is not None:
-        ngo_mapping = column_mapper_ui(
-            ngo_df, 
-            "NGO",
-            {
-                'required': {
-                    'RecordID': 'Unique ID for each record',
-                    'FacilityName': 'Facility name',
-                    'District': 'District/region location'
+                source_key='gov'
+            )
+            st.session_state.column_mappings['gov'] = gov_mapping
+        
+        if ngo_df is not None:
+            ngo_mapping = column_mapper_ui(
+                ngo_df, 
+                "NGO",
+                {
+                    'required': {
+                        'RecordID': 'Unique ID for each record',
+                        'FacilityName': 'Facility name',
+                        'District': 'District/region location'
+                    },
+                    'optional': {
+                        'Phone': 'Phone number',
+                        'FarmerName': 'Person/farmer name (for multi-entity)',
+                        'Gender': 'Gender (for persons)'
+                    }
                 },
-                'optional': {
-                    'Phone': 'Phone number',
-                    'FarmerName': 'Person/farmer name (for multi-entity)',
-                    'Gender': 'Gender (for persons)'
-                }
-            },
-            source_key='ngo'
-        )
-        st.session_state.column_mappings['ngo'] = ngo_mapping
-    
-    if wa_df is not None:
-        wa_mapping = column_mapper_ui(
-            wa_df, 
-            "WhatsApp",
-            {
-                'required': {
-                    'RecordID': 'Unique ID for each record',
-                    'RelatedFacility': 'Related facility name',
-                    'DistrictNote': 'District/location note'
+                source_key='ngo'
+            )
+            st.session_state.column_mappings['ngo'] = ngo_mapping
+        
+        if wa_df is not None:
+            wa_mapping = column_mapper_ui(
+                wa_df, 
+                "WhatsApp",
+                {
+                    'required': {
+                        'RecordID': 'Unique ID for each record',
+                        'RelatedFacility': 'Related facility name',
+                        'DistrictNote': 'District/location note'
+                    },
+                    'optional': {
+                        'Phone': 'Phone number',
+                        'ContactName': 'Contact person name (for multi-entity)',
+                        'LocationNickname': 'Location nickname'
+                    }
                 },
-                'optional': {
-                    'Phone': 'Phone number',
-                    'ContactName': 'Contact person name (for multi-entity)',
-                    'LocationNickname': 'Location nickname'
-                }
-            },
-            source_key='wa'
-        )
-        st.session_state.column_mappings['wa'] = wa_mapping
+                source_key='wa'
+            )
+            st.session_state.column_mappings['wa'] = wa_mapping
         
         # Multi-entity person mapping
         person_ngo_mapping = None
@@ -620,29 +620,29 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
         # Validate mappings
         st.markdown("---")
         st.subheader("✅ Validation")
-    
-    validation_cols = st.columns(3 if not enable_multi_entity else 5)
-    
-    with validation_cols[0]:
-        gov_missing = validate_mapping(gov_mapping, ['RecordID', 'OfficialFacilityName', 'District'])
-        if not gov_missing:
-            st.success("✅ Government: Ready")
-        else:
-            st.error(f"❌ Gov missing: {', '.join(gov_missing)}")
-    
-    with validation_cols[1]:
-        ngo_missing = validate_mapping(ngo_mapping, ['RecordID', 'FacilityName', 'District'])
-        if not ngo_missing:
-            st.success("✅ NGO: Ready")
-        else:
-            st.error(f"❌ NGO missing: {', '.join(ngo_missing)}")
-    
-    with validation_cols[2]:
-        wa_missing = validate_mapping(wa_mapping, ['RecordID', 'RelatedFacility', 'DistrictNote'])
-        if not wa_missing:
-            st.success("✅ WhatsApp: Ready")
-        else:
-            st.error(f"❌ WA missing: {', '.join(wa_missing)}")
+        
+        validation_cols = st.columns(3 if not enable_multi_entity else 5)
+        
+        with validation_cols[0]:
+            gov_missing = validate_mapping(gov_mapping, ['RecordID', 'OfficialFacilityName', 'District'])
+            if not gov_missing:
+                st.success("✅ Government: Ready")
+            else:
+                st.error(f"❌ Gov missing: {', '.join(gov_missing)}")
+        
+        with validation_cols[1]:
+            ngo_missing = validate_mapping(ngo_mapping, ['RecordID', 'FacilityName', 'District'])
+            if not ngo_missing:
+                st.success("✅ NGO: Ready")
+            else:
+                st.error(f"❌ NGO missing: {', '.join(ngo_missing)}")
+        
+        with validation_cols[2]:
+            wa_missing = validate_mapping(wa_mapping, ['RecordID', 'RelatedFacility', 'DistrictNote'])
+            if not wa_missing:
+                st.success("✅ WhatsApp: Ready")
+            else:
+                st.error(f"❌ WA missing: {', '.join(wa_missing)}")
         
         person_valid = True
         if enable_multi_entity:
@@ -950,11 +950,17 @@ if st.session_state.results:
         if len(entity_clusters) > 0 and "SourceSystem" in entity_clusters.columns:
             st.markdown("### Records by Source System")
             source_dist = entity_clusters["SourceSystem"].value_counts()
+            # Fix for plotly duplicate index error
+            source_df = pd.DataFrame({
+                'Source': source_dist.index,
+                'Count': source_dist.values
+            })
             fig = px.bar(
-                x=source_dist.index,
-                y=source_dist.values,
+                source_df, 
+                x='Source', 
+                y='Count',
                 title="Distribution by Source",
-                labels={'x': 'Source System', 'y': 'Record Count'}
+                labels={'Source': 'Source System', 'Count': 'Record Count'}
             )
             st.plotly_chart(fig, use_container_width=True)
 
@@ -1188,7 +1194,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 2rem 0;'>
     <p><strong>VERO - Entity Resolution Platform v4.0.4 Ultimate</strong></p>
-    <p>✅ Flexible Column Mapping | ✅ Mapping Memory | ✅ Multi-Entity Support</p>
+    <p>✅ Flexible Column Mapping | ✅ Mapping Memory | ✅ Multi-Entity Support | ✅ Smart Auto-Mapping</p>
     <p>Streaming-Ready Canonical Identity Fabric | 65.7% Person Resolution Rate</p>
     <p>© 2025</p>
 </div>
