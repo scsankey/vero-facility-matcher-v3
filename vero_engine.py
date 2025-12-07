@@ -431,26 +431,26 @@ def detect_ground_truth_columns(ground_truth_df):
             if 'record_b' not in col_map:
                 col_map['record_b'] = col
         
-        # Check for Same Entity / Match
-        if ('same' in col_lower and 'entity' in col_lower) or 'match' in col_lower:
+        # Check for Same Entity / Match / Label
+        if ('same' in col_lower and 'entity' in col_lower) or 'match' in col_lower or col_lower == 'label':
             if 'same_entity' not in col_map:
                 col_map['same_entity'] = col
     
     # Fallback: Try exact common variations
     if 'record_a' not in col_map:
-        for possible in ['Record_ID A', 'Record_ID_A', 'RecordID_A', 'RecordIDA', 'Record A', 'RecordA']:
+        for possible in ['Record_ID A', 'Record_ID_A', 'RecordID_A', 'RecordIDA', 'Record A', 'RecordA', 'record_A']:
             if possible in gt_columns:
                 col_map['record_a'] = possible
                 break
     
     if 'record_b' not in col_map:
-        for possible in ['Record_ID B', 'Record_ID_B', 'RecordID_B', 'RecordIDB', 'Record B', 'RecordB']:
+        for possible in ['Record_ID B', 'Record_ID_B', 'RecordID_B', 'RecordIDB', 'Record B', 'RecordB', 'record_B']:
             if possible in gt_columns:
                 col_map['record_b'] = possible
                 break
     
     if 'same_entity' not in col_map:
-        for possible in ['Same Entity', 'Same_Entity', 'SameEntity', 'Match', 'IsMatch', 'is_match']:
+        for possible in ['Same Entity', 'Same_Entity', 'SameEntity', 'Match', 'IsMatch', 'is_match', 'label', 'Label', 'LABEL']:
             if possible in gt_columns:
                 col_map['same_entity'] = possible
                 break
@@ -513,9 +513,9 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
                 f"Missing: {', '.join(missing)}\n"
                 f"Found columns: {available_cols}\n\n"
                 f"Expected column names (or variations):\n"
-                f"  - Record_ID A, Record_ID_A, RecordID_A, Record A\n"
-                f"  - Record_ID B, Record_ID_B, RecordID_B, Record B\n"
-                f"  - Same Entity, Same_Entity, SameEntity, Match, IsMatch"
+                f"  - Record_ID A, Record_ID_A, RecordID_A, Record A, record_A\n"
+                f"  - Record_ID B, Record_ID_B, RecordID_B, Record B, record_B\n"
+                f"  - Same Entity, Same_Entity, SameEntity, Match, IsMatch, label, Label"
             )
         
         print(f"  ✅ Detected columns:")
