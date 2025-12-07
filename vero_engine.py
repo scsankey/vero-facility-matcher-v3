@@ -457,8 +457,18 @@ def detect_ground_truth_columns(ground_truth_df):
     
     return col_map
 
-def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pretrained=False, pretrained_model=None, pretrained_scaler=None, extra_entity_sources=None):
+def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pretrained=False, pretrained_model=None, pretrained_scaler=None, extra_entity_sources=None, high_threshold=None, medium_threshold=None, district_threshold=None):
     """Main VERO pipeline - from raw data to golden records"""
+    
+    # Use provided thresholds or defaults
+    global HIGH_CONFIDENCE_THRESHOLD, MEDIUM_CONFIDENCE_THRESHOLD, DISTRICT_BLOCKING_THRESHOLD
+    
+    if high_threshold is not None:
+        HIGH_CONFIDENCE_THRESHOLD = high_threshold
+    if medium_threshold is not None:
+        MEDIUM_CONFIDENCE_THRESHOLD = medium_threshold
+    if district_threshold is not None:
+        DISTRICT_BLOCKING_THRESHOLD = district_threshold
     
     print("="*70)
     print("VERO PIPELINE STARTING")
