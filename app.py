@@ -410,7 +410,8 @@ if 'saved_mappings' not in st.session_state:
         'ngo': None,
         'wa': None,
         'person_ngo': None,
-        'person_wa': None
+        'person_wa': None,
+        'ground_truth': None
     }
 if 'use_saved_mapping' not in st.session_state:
     st.session_state.use_saved_mapping = {
@@ -418,7 +419,8 @@ if 'use_saved_mapping' not in st.session_state:
         'ngo': True,
         'wa': True,
         'person_ngo': True,
-        'person_wa': True
+        'person_wa': True,
+        'ground_truth': True
     }
 if 'enable_multi_entity' not in st.session_state:
     st.session_state.enable_multi_entity = False
@@ -504,6 +506,86 @@ if excel_file or (gov_csv and ngo_csv and wa_csv):
             ngo_df = pd.read_csv(ngo_csv) if ngo_csv else None
             wa_df = pd.read_csv(wa_csv) if wa_csv else None
             gt_df = pd.read_csv(gt_csv) if gt_csv else None
+        
+        # Ground truth column mapping (if provided)
+        gt_mapping = None
+        if gt_df is not None:
+            st.markdown("---")
+            st.subheader("🎯 Ground Truth Mapping")
+            st.info("💡 Map your ground truth columns - RecordIDs will be automatically matched to sources")
+            
+            gt_mapping = column_mapper_ui(
+                gt_df,
+                "Ground Truth",
+                {
+                    'required': {
+                        'record_A': 'First record ID (e.g., G1, N5, W12)',
+                        'record_B': 'Second record ID (e.g., N8, G3, W15)',
+                        'label': 'Match label (yes/1 = match, no/0 = not match)'
+                    },
+                    'optional': {}
+                },
+                source_key='ground_truth'
+            )
+            
+            # Apply ground truth mapping
+            gt_df_mapped = apply_column_mapping(gt_df, gt_mapping)
+            
+            # CRITICAL FIX: Convert ground truth RecordIDs to match the prefixed format
+            # The unified dataset uses: facility_Gov_G1, facility_NGO_N5, etc.
+            # But ground truth has: G1, N5, etc.
+            # We need to add prefixes based on the RecordID pattern
+            
+            def add_record_prefix(record_id):
+                """Add entity_type_source prefix to match unified dataset format"""
+                record_id = str(record_id).strip()
+                
+                # Already has prefix? Return as-is
+                if '_' in record_id and any(record_id.startswith(f"{t}_") for t in ['facility', 'person', 'farm']):
+                    return record_id
+                
+                # Detect source from RecordID pattern
+                # G1-G999 = Gov, N1-N999 = NGO, W1-W999 = WhatsApp
+                if record_id.startswith('G'):
+                    return f"facility_Gov_{record_id}"
+                elif record_id.startswith('N'):
+                    return f"facility_NGO_{record_id}"
+                elif record_id.startswith('W'):
+                    return f"facility_WhatsApp_{record_id}"
+                else:
+                    # Unknown pattern, try to find in unified dataset
+                    return record_id
+            
+            # Add prefixes to ground truth RecordIDs
+            gt_df_mapped['record_A'] = gt_df_mapped['record_A'].apply(add_record_prefix)
+            gt_df_mapped['record_B'] = gt_df_mapped['record_B'].apply(add_record_prefix)
+            
+            # Standardize label column to 1/0 integers
+            def standardize_label(val):
+                """Convert label to 1 (match) or 0 (no match)"""
+                val_str = str(val).lower().strip()
+                if val_str in ['yes', '1', 'true', 'match', 'same']:
+                    return 1
+                elif val_str in ['no', '0', 'false', 'different', 'not']:
+                    return 0
+                else:
+                    # Try to convert to int
+                    try:
+                        return int(float(val))
+                    except:
+                        return 0
+            
+            gt_df_mapped['label'] = gt_df_mapped['label'].apply(standardize_label)
+            
+            # Show preview of mapped ground truth
+            with st.expander("👁️ Preview Mapped Ground Truth"):
+                preview_df = gt_df_mapped[['record_A', 'record_B', 'label']].head(5).copy()
+                st.dataframe(preview_df, use_container_width=True)
+                st.caption(f"✅ Mapped {len(gt_df_mapped)} ground truth pairs")
+                st.caption(f"   Matches: {(gt_df_mapped['label'] == 1).sum()} | Non-matches: {(gt_df_mapped['label'] == 0).sum()}")
+            
+            # Use mapped version
+            gt_df = gt_df_mapped
         
         # Column mapping UI for facilities
         st.subheader("🏢 Facility Data Mapping")
