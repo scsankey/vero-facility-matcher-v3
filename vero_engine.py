@@ -584,10 +584,54 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
                 f"Expected: Two different columns for A and B."
             )
         
-        # DIAGNOSTIC: Show ground truth RecordIDs
-        print(f"\n  Ground truth RecordID samples:")
+        # DIAGNOSTIC: Show ground truth RecordIDs (both raw and what's in unified)
+        print(f"\n  Ground truth RecordID samples (raw):")
         print(f"     record_A: {ground_truth_df[col_map['record_a']].head(3).tolist()}")
         print(f"     record_B: {ground_truth_df[col_map['record_b']].head(3).tolist()}")
+        print(f"\n  Unified dataset RecordID samples:")
+        print(f"     {list(u_idx.index[:5])}")
+        print(f"\n  RecordID format check:")
+        sample_gt_a = str(ground_truth_df[col_map['record_a']].iloc[0]).strip()
+        sample_unified = list(u_idx.index[:1])[0] if len(u_idx) > 0 else 'N/A'
+        has_prefix_gt = '_' in sample_gt_a
+        has_prefix_unified = '_' in str(sample_unified)
+        print(f"     Ground truth has prefix: {has_prefix_gt} (example: {sample_gt_a})")
+        print(f"     Unified has prefix: {has_prefix_unified} (example: {sample_unified})")
+        if has_prefix_gt != has_prefix_unified:
+            print(f"     ⚠️  Format mismatch detected - using flexible matching")
+        
+        # CRITICAL FIX: Create lookup function that handles BOTH formats
+        def find_record_id(gt_id, u_idx):
+            """
+            Find RecordID in unified index, handling both:
+            - Simple format: G1, N5, W12
+            - Prefixed format: facility_Gov_G1, facility_NGO_N5, facility_WhatsApp_W12
+            """
+            gt_id = str(gt_id).strip()
+            
+            # Try exact match first
+            if gt_id in u_idx.index:
+                return gt_id, True
+            
+            # If has prefix, try stripping it
+            # Format: facility_Gov_G1 → G1
+            if '_' in gt_id:
+                parts = gt_id.split('_')
+                if len(parts) >= 3:
+                    # Last part should be the simple ID
+                    simple_id = parts[-1]
+                    if simple_id in u_idx.index:
+                        return simple_id, True
+            
+            # If no prefix, try adding common prefixes
+            # G1 → facility_Gov_G1
+            if not '_' in gt_id:
+                for prefix in ['facility_Gov_', 'facility_NGO_', 'facility_WhatsApp_']:
+                    prefixed_id = f"{prefix}{gt_id}"
+                    if prefixed_id in u_idx.index:
+                        return prefixed_id, True
+            
+            return gt_id, False
         
         # Process ground truth using detected columns
         features = []
@@ -596,24 +640,24 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         missing_b = []
         
         for idx, row in ground_truth_df.iterrows():
-            rec_a_id = str(row[col_map['record_a']]).strip()
-            rec_b_id = str(row[col_map['record_b']]).strip()
+            rec_a_id_raw = str(row[col_map['record_a']]).strip()
+            rec_b_id_raw = str(row[col_map['record_b']]).strip()
             
             # Flexible matching for "yes/no" or "true/false" or "1/0" or "match/no match"
             same_entity_value = str(row[col_map['same_entity']]).lower().strip()
             same_entity = 1 if same_entity_value in ['yes', 'true', '1', 'match', 'y', 't'] else 0
             
-            # Check if both IDs exist in unified index
-            found_a = rec_a_id in u_idx.index
-            found_b = rec_b_id in u_idx.index
+            # Find matching IDs (handles both formats)
+            rec_a_id, found_a = find_record_id(rec_a_id_raw, u_idx)
+            rec_b_id, found_b = find_record_id(rec_b_id_raw, u_idx)
             
             if not found_a:
-                if rec_a_id not in missing_a:
-                    missing_a.append(rec_a_id)
+                if rec_a_id_raw not in missing_a:
+                    missing_a.append(rec_a_id_raw)
             
             if not found_b:
-                if rec_b_id not in missing_b:
-                    missing_b.append(rec_b_id)
+                if rec_b_id_raw not in missing_b:
+                    missing_b.append(rec_b_id_raw)
             
             if found_a and found_b:
                 rec_a = u_idx.loc[rec_a_id]
