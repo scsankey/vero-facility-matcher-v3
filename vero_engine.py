@@ -1,8 +1,15 @@
 """
-30.11
+30.11 - FIXED VERSION
 vero_engine.py
 VERO Entity Resolution Engine
 Core matching logic for facility entity resolution
+
+FIXES APPLIED:
+- ✅ RecordID format compatibility with app.py prefixes
+- ✅ No duplicate column mappings (A and B to same column)
+- ✅ Proper "label" column detection
+- ✅ Better ground truth validation with diagnostic output
+- ✅ Future-proof column mapping
 """
 
 import pandas as pd
@@ -30,7 +37,12 @@ NAME_SIMILARITY_THRESHOLD = 0.85
 DISTRICT_BLOCKING_THRESHOLD = 0.75
 
 def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
-    """Combine all datasets into unified format"""
+    """
+    Combine all datasets into unified format.
+    
+    CRITICAL: RecordIDs are kept as-is from input DataFrames.
+    If app.py adds prefixes (e.g., facility_Gov_G1), they pass through unchanged.
+    """
     gov_prepared = pd.DataFrame({
         'RecordID': gov_df['RecordID'],
         'Name': gov_df['OfficialFacilityName'],
@@ -60,6 +72,7 @@ def prepare_unified_dataset(gov_df, ngo_df, whatsapp_df):
     
     unified = pd.concat([gov_prepared, ngo_prepared, whatsapp_prepared], ignore_index=True)
     
+    # Keep RecordIDs as-is (strings), don't modify prefixes
     unified["RecordID"] = unified["RecordID"].astype(str)
     unified["Source"] = unified["Source"].astype(str)
     unified["name_clean"] = (
@@ -411,48 +424,84 @@ def build_canonical_entities_table(golden_tables: dict) -> pd.DataFrame:
 
 def detect_ground_truth_columns(ground_truth_df):
     """
-    Detect column names in ground truth file with flexible matching.
-    Returns dict mapping standard names to actual column names.
+    Detect column names in ground truth file with NO DUPLICATES.
+    
+    CRITICAL FIX: Tracks used columns to prevent mapping both A and B to same column.
     """
     gt_columns = ground_truth_df.columns.tolist()
     col_map = {}
+    used_columns = set()  # Track which columns we've already assigned
     
-    # Detect Record_ID A (or variations)
+    # Priority 1: Exact match for "label" (most specific)
     for col in gt_columns:
+        if col.lower() == 'label' and col not in used_columns:
+            col_map['same_entity'] = col
+            used_columns.add(col)
+            break
+    
+    # Priority 2: Find Record A (must not be already used)
+    for col in gt_columns:
+        if col in used_columns:
+            continue
+        
         col_lower = col.lower().replace('_', ' ').replace('-', ' ').strip()
         
-        # Check for Record A
-        if 'record' in col_lower and ('a' == col_lower.split()[-1] or 'a' in col_lower):
-            if 'record_a' not in col_map:
+        # Check for Record A patterns
+        if 'record' in col_lower and 'a' in col_lower:
+            # More specific check: ends with 'a' or has 'a' after 'record'
+            words = col_lower.split()
+            if words[-1] == 'a' or ('record' in words and 'a' in words):
                 col_map['record_a'] = col
-        
-        # Check for Record B
-        if 'record' in col_lower and ('b' == col_lower.split()[-1] or 'b' in col_lower):
-            if 'record_b' not in col_map:
-                col_map['record_b'] = col
-        
-        # Check for Same Entity / Match / Label
-        if ('same' in col_lower and 'entity' in col_lower) or 'match' in col_lower or col_lower == 'label':
-            if 'same_entity' not in col_map:
-                col_map['same_entity'] = col
+                used_columns.add(col)
+                break
     
-    # Fallback: Try exact common variations
+    # Priority 3: Find Record B (must be DIFFERENT from A and not already used)
+    for col in gt_columns:
+        if col in used_columns:
+            continue
+        
+        col_lower = col.lower().replace('_', ' ').replace('-', ' ').strip()
+        
+        # Check for Record B patterns
+        if 'record' in col_lower and 'b' in col_lower:
+            words = col_lower.split()
+            if words[-1] == 'b' or ('record' in words and 'b' in words):
+                col_map['record_b'] = col
+                used_columns.add(col)
+                break
+    
+    # Priority 4: Find same_entity/match column if not found yet
+    if 'same_entity' not in col_map:
+        for col in gt_columns:
+            if col in used_columns:
+                continue
+            
+            col_lower = col.lower()
+            if ('same' in col_lower and 'entity' in col_lower) or 'match' in col_lower:
+                col_map['same_entity'] = col
+                used_columns.add(col)
+                break
+    
+    # Fallback: Try exact common variations (still avoiding duplicates)
     if 'record_a' not in col_map:
         for possible in ['Record_ID A', 'Record_ID_A', 'RecordID_A', 'RecordIDA', 'Record A', 'RecordA', 'record_A']:
-            if possible in gt_columns:
+            if possible in gt_columns and possible not in used_columns:
                 col_map['record_a'] = possible
+                used_columns.add(possible)
                 break
     
     if 'record_b' not in col_map:
         for possible in ['Record_ID B', 'Record_ID_B', 'RecordID_B', 'RecordIDB', 'Record B', 'RecordB', 'record_B']:
-            if possible in gt_columns:
+            if possible in gt_columns and possible not in used_columns:
                 col_map['record_b'] = possible
+                used_columns.add(possible)
                 break
     
     if 'same_entity' not in col_map:
-        for possible in ['Same Entity', 'Same_Entity', 'SameEntity', 'Match', 'IsMatch', 'is_match', 'label', 'Label', 'LABEL']:
-            if possible in gt_columns:
+        for possible in ['Same Entity', 'Same_Entity', 'SameEntity', 'Match', 'IsMatch', 'is_match', 'Label', 'LABEL']:
+            if possible in gt_columns and possible not in used_columns:
                 col_map['same_entity'] = possible
+                used_columns.add(possible)
                 break
     
     return col_map
@@ -477,6 +526,7 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
     print("\n[1/6] Preparing unified dataset...")
     unified = prepare_unified_dataset(gov_df, ngo_df, whatsapp_df)
     print(f"✅ Unified dataset: {len(unified)} records")
+    print(f"   RecordID samples: {unified['RecordID'].head(3).tolist()}")
     
     print("\n[2/6] Computing embeddings...")
     embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -493,7 +543,10 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         print("\n[3/6] Training model from ground truth...")
         u_idx = unified.set_index("RecordID")
         
-        # FLEXIBLE COLUMN DETECTION
+        # DIAGNOSTIC: Show what RecordIDs are available
+        print(f"   Unified RecordID index samples: {list(u_idx.index[:5])}")
+        
+        # FLEXIBLE COLUMN DETECTION (NO DUPLICATES)
         print("  Detecting ground truth column names...")
         col_map = detect_ground_truth_columns(ground_truth_df)
         
@@ -506,7 +559,7 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
             if 'record_b' not in col_map:
                 missing.append('Record_ID B (or variations)')
             if 'same_entity' not in col_map:
-                missing.append('Same Entity / Match (or variations)')
+                missing.append('Same Entity / Match / label (or variations)')
             
             raise ValueError(
                 f"❌ Ground truth file missing required columns.\n"
@@ -523,28 +576,77 @@ def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pre
         print(f"     Record B: '{col_map['record_b']}'")
         print(f"     Same Entity: '{col_map['same_entity']}'")
         
+        # CRITICAL: Verify columns are DIFFERENT
+        if col_map['record_a'] == col_map['record_b']:
+            raise ValueError(
+                f"❌ ERROR: record_A and record_B mapped to SAME column: '{col_map['record_a']}'\n"
+                f"This is a bug in column detection. Please check your ground truth file.\n"
+                f"Expected: Two different columns for A and B."
+            )
+        
+        # DIAGNOSTIC: Show ground truth RecordIDs
+        print(f"\n  Ground truth RecordID samples:")
+        print(f"     record_A: {ground_truth_df[col_map['record_a']].head(3).tolist()}")
+        print(f"     record_B: {ground_truth_df[col_map['record_b']].head(3).tolist()}")
+        
         # Process ground truth using detected columns
         features = []
-        for _, row in ground_truth_df.iterrows():
-            rec_a_id = str(row[col_map['record_a']])
-            rec_b_id = str(row[col_map['record_b']])
+        matched_count = 0
+        missing_a = []
+        missing_b = []
+        
+        for idx, row in ground_truth_df.iterrows():
+            rec_a_id = str(row[col_map['record_a']]).strip()
+            rec_b_id = str(row[col_map['record_b']]).strip()
             
             # Flexible matching for "yes/no" or "true/false" or "1/0" or "match/no match"
             same_entity_value = str(row[col_map['same_entity']]).lower().strip()
             same_entity = 1 if same_entity_value in ['yes', 'true', '1', 'match', 'y', 't'] else 0
             
-            if rec_a_id in u_idx.index and rec_b_id in u_idx.index:
+            # Check if both IDs exist in unified index
+            found_a = rec_a_id in u_idx.index
+            found_b = rec_b_id in u_idx.index
+            
+            if not found_a:
+                if rec_a_id not in missing_a:
+                    missing_a.append(rec_a_id)
+            
+            if not found_b:
+                if rec_b_id not in missing_b:
+                    missing_b.append(rec_b_id)
+            
+            if found_a and found_b:
                 rec_a = u_idx.loc[rec_a_id]
                 rec_b = u_idx.loc[rec_b_id]
                 
                 feats = compute_pair_features(rec_a, rec_b, id_to_emb)
                 feats['SameEntity'] = same_entity
                 features.append(feats)
+                matched_count += 1
+        
+        # DIAGNOSTIC OUTPUT
+        print(f"\n  Ground truth processing:")
+        print(f"     Total pairs in ground truth: {len(ground_truth_df)}")
+        print(f"     Successfully matched pairs: {matched_count}")
+        
+        if missing_a:
+            print(f"     ⚠️  Missing record_A IDs (first 5): {missing_a[:5]}")
+        if missing_b:
+            print(f"     ⚠️  Missing record_B IDs (first 5): {missing_b[:5]}")
         
         if not features:
             raise ValueError(
-                "❌ No valid feature pairs generated from ground truth.\n"
-                "Check that Record IDs in ground truth file match Record IDs in your data files."
+                f"❌ No valid feature pairs generated from ground truth.\n\n"
+                f"DIAGNOSTIC INFO:\n"
+                f"  - Ground truth pairs: {len(ground_truth_df)}\n"
+                f"  - Matched pairs: {matched_count}\n"
+                f"  - Missing record_A IDs: {len(missing_a)}\n"
+                f"  - Missing record_B IDs: {len(missing_b)}\n\n"
+                f"LIKELY CAUSE: RecordID format mismatch.\n"
+                f"  Ground truth has: {ground_truth_df[col_map['record_a']].iloc[0] if len(ground_truth_df) > 0 else 'N/A'}\n"
+                f"  Unified dataset has: {list(u_idx.index[:3])}\n\n"
+                f"FIX: Ensure ground truth RecordIDs match the format in your data files.\n"
+                f"     If app.py adds prefixes (e.g., 'facility_Gov_G1'), ground truth must match."
             )
         
         similarity_features = pd.DataFrame(features)
