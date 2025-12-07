@@ -457,7 +457,7 @@ def detect_ground_truth_columns(ground_truth_df):
     
     return col_map
 
-def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pretrained=False, pretrained_model=None, pretrained_scaler=None):
+def run_vero_pipeline(gov_df, ngo_df, whatsapp_df, ground_truth_df=None, use_pretrained=False, pretrained_model=None, pretrained_scaler=None, extra_entity_sources=None):
     """Main VERO pipeline - from raw data to golden records"""
     
     print("="*70)
