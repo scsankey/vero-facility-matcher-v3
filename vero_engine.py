@@ -16,12 +16,6 @@ import plotly.express as px
 from io import BytesIO
 import json
 
-# Import modules
-from vero_engine import run_vero_pipeline
-from llm_backend import answer_entity_question, get_llm_status
-from storage import init_storage, add_batch, load_all_raw, get_ingestion_history, get_storage_stats, clear_storage
-from transformations import reshape_raw_to_logical_sources, enrich_with_ingest_metadata
-from smart_mapper import smart_auto_map, get_mapping_summary, SmartColumnMapper
 
 st.set_page_config(
     page_title="VERO - Entity Resolution",
